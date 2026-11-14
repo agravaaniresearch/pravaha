@@ -23,9 +23,10 @@ One JSON object per line.
 | `eid` | `device:seq`, unique and the merge key |
 | `device` | Machine name |
 | `ts` | Hybrid logical clock: 14 digit wall time in milliseconds, 5 digit counter, device name, joined by dots. Sorts as plain text |
-| `type` | `open`, `dwell`, `dismiss`, `undismiss`, `save`, `unsave`, `read_no_open`, `train`, `calibration` |
+| `type` | `open`, `card`, `dwell`, `dismiss`, `undismiss`, `save`, `unsave`, `read_no_open`, `train`, `calibration` |
 | `entry` | Miniflux entry id, when the event is about an article |
 | `feed` | Miniflux feed id |
+| `card` | An article was read as an in-reader card. Logged once per article per session. Adds 0.05 to the feed's standing and a 0.02 pull on the interest profile, against 0.15 and 0.05 for `open` (a background tab) |
 | `payload` | Type specific. `dwell`: `{ms}`. `open` and `save`: `{terms, score}` so the interest profile replays identically. `train`: `{type, key, value}` |
 
 Rules that make merging safe:
@@ -59,4 +60,9 @@ with outside score s:  final = 0.8*final + 0.2*s
 
 ## Local storage keys
 
-`settings`, `cache` (articles and feeds), `events`, `syncState`, `pendingOps` (Miniflux changes waiting to send), `raindropCache`, `echoLocal`, `enrichment`, `net`, `others`, `pendingHistory`. Dwell tracker state is kept in `storage.session` because the background page can unload.
+`settings`, `cache` (articles and feeds), `bodies` (article HTML fetched on demand, trimmed with the cache), `icons` (feed icons as data URLs), `events`, `syncState`, `pendingOps` (Miniflux changes waiting to send), `raindropCache`, `echoLocal`, `enrichment`, `net`, `others`, `pendingHistory`. Dwell tracker state is kept in `storage.session` because the background page can unload.
+
+
+Interface preferences (theme, palette, density, thumbnails, read on scroll, reading type) and collapsed feeds live in the reader page's `localStorage` under `pravaha.ui` and `pravaha.collapsed`. They stay on the machine and are not synced.
+
+Bundled fonts, all under the SIL Open Font Licence (licences are in `extension/ui/fonts/`): IBM Plex Sans for the interface, Newsreader and Literata for reading.

@@ -17,7 +17,7 @@ export const squash = (cos) => 1 - Math.exp(-3 * Math.max(0, cos)); // cosine of
 
 export function decay(ageMs) { return Math.pow(0.5, ageMs / (HALF_LIFE_DAYS * 86400000)); }
 
-export const AUTHORITY_SIGNALS = { open: 0.15, dwell: 0.10, readNoOpen: -0.05, save: 0.25 };
+export const AUTHORITY_SIGNALS = { open: 0.15, dwell: 0.10, readNoOpen: -0.05, save: 0.25, card: 0.05 };
 
 export function authorityOf(delta) { return clamp(AUTHORITY_BASE + delta); }
 

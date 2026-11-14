@@ -8,8 +8,12 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 
 - **Reads from Miniflux.** Folders are Miniflux categories. A slash makes a nested folder, so `Defence/Shipbuilding` appears as Shipbuilding inside Defence.
 - **Ranks with four signals.** The score is 0.40 tag match, 0.30 sites you read, 0.20 feed standing and 0.10 freshness. Training rules add or subtract up to 0.2. Feeds you have not opened this session get a small novelty boost. All weights are editable in Settings.
+- **Reads in place.** Opening an article shows it as a card inside the list, in Newsreader or Literata. Press `w` (the coffee cup) to ask Miniflux for the complete article. Press `b` to open it in a background tab. Both are logged, and a background open counts more than a card read.
+- **Stays organised.** Feeds are collapsible sections with their Miniflux icon and an unread count. Marking a section read folds it away. Articles can be marked read as they scroll past the top. The tabs are Newsfeed, Saved, Stats, Sync and Settings.
+- **Uses what Miniflux offers.** Thumbnails, reading time, word count, comment links, tags, audio and video enclosures and the full-article flag show as small chips.
+- **Has an OLED black theme** besides light and dark, and four reading controls: type, size, line gap and width.
 - **Shows relevance as colour.** There are no Good, Great or Best tiers. Each row has a bar and a chip that darken as the score rises. Three palettes are included: ember, saffron and moss.
-- **Learns from what you do.** Opening, reading for more than 15 seconds, saving and dismissing all move a feed's standing. They fade with a 14 day half life. Opens and saves also pull your interest profile toward the article.
+- **Learns from what you do.** Opening in a tab, reading a card, reading for more than 15 seconds, saving and dismissing all move a feed's standing. They fade with a 14 day half life. Opens and saves also pull your interest profile toward the article.
 - **Trains like NewsBlur.** Open an article's details and choose More or Less for the feed, the author or a keyword.
 - **Suggests tags locally.** Suggestions come from your own Raindrop tag vocabulary. No model and no network call is involved.
 - **Syncs two machines safely.** Every action is an event in an append-only log. Each machine writes only its own files, so they cannot overwrite each other. Merging is a set union, so the order of arrival never changes the result.
@@ -62,20 +66,25 @@ See [DEPLOY.md](DEPLOY.md). The short version: download `pravaha.xpi` from the l
 
 ```
 npm install
-npm test                       # 59 tests
+npm test                       # 81 tests
 node tools/failure-rates.mjs   # random failure injection, see docs/FAILURE_RATES.md
 npm run lint                   # Mozilla's web-ext lint
 ```
 
-The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. They cover scoring, the event log, two-machine convergence, offline queues, corrupted files and the engine end to end. The failure harness found and fixed one real bug: two overlapping Miniflux updates could drop a read. It is covered by a regression test.
+The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. They cover scoring, the event log, two-machine convergence, offline queues, corrupted files and the engine end to end. The reader screen itself is driven under jsdom against the real engine: opening cards, the sanitiser, collapsing, read on scroll, settings tests, themes and shortcuts. The jsdom run found one real bug, now fixed: Undo dismissed did not make the article unread again. The failure harness found and fixed one real bug: two overlapping Miniflux updates could drop a read. It is covered by a regression test.
 
 ## What has not been verified
 
-- **Not run in a real Firefox.** The build has no Firefox binary. The code passes Mozilla's linter and the logic is tested in Node, but the reader screen, tab events and the browser APIs have not been exercised in a live browser.
+- **Not run in a real Firefox.** The build has no Firefox binary. The code passes Mozilla's linter and the reader screen is tested under jsdom, but layout, fonts, scrolling and the browser APIs have not been exercised in a live browser. Read on scroll depends on Firefox's IntersectionObserver behaving as in the test.
+- **Two Miniflux calls are untested against a real server.** Full-article fetch (`/entries/{id}/fetch-content`) and feed icons (`/feeds/{id}/icon`) follow the documented API and are tested against fakes only.
 - **Not run against real servers.** The Miniflux, Fastmail WebDAV and Raindrop calls follow their documented APIs and are tested against fakes only. The Miniflux `changed_after` filter is the least certain of them.
 - **Two machines can score slightly differently** until both hold the same Raindrop data, history snapshots and events. The order of articles is usually the same. Small differences in the number are expected.
 - **No Web Worker yet.** Scoring runs on the main thread of the background page. It is fast at a few thousand articles. A worker is a later step if it is ever needed.
 - **Keys stay on the machine by default.** Syncing them through Firefox Sync is an option, off by default. This departs from the Grok spec.
+
+## Shortcuts
+
+`j` and `k` move. `o` or Enter opens the card. `b` opens a background tab. `w` fetches the full article. `s` saves. `m` toggles read. `x` dismisses. `Shift+C` collapses or expands every feed. Esc closes the card.
 
 ## Layout
 

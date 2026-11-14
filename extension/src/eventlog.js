@@ -27,7 +27,7 @@ export class Clock {
   }
 }
 
-export const EVENT_TYPES = new Set(["open", "dwell", "dismiss", "undismiss", "save", "unsave", "read_no_open", "train", "calibration"]);
+export const EVENT_TYPES = new Set(["open", "card", "dwell", "dismiss", "undismiss", "save", "unsave", "read_no_open", "train", "calibration"]);
 
 export function validEvent(e) {
   return e && typeof e === "object" && typeof e.eid === "string" && typeof e.ts === "string" &&
@@ -78,7 +78,7 @@ export function parseSegment(text) {
 
 // Replay the whole log into derived state. Deterministic: same events, same result.
 export function derive(events, now) {
-  const dismissed = new Map(), saved = new Map(), opens = new Map(), dwell = new Map(), trainMap = new Map();
+  const cards = new Map(), dismissed = new Map(), saved = new Map(), opens = new Map(), dwell = new Map(), trainMap = new Map();
   const authority = new Map(); const pulls = [];
   const bump = (feed, d, ts) => {
     if (feed === undefined || feed === null) return;
@@ -92,6 +92,11 @@ export function derive(events, now) {
         opens.set(e.entry, (opens.get(e.entry) || 0) + 1);
         bump(e.feed, AUTHORITY_SIGNALS.open, e.ts);
         if (p.terms) pulls.push({ kind: "open", terms: p.terms });
+        break;
+      case "card":
+        cards.set(e.entry, (cards.get(e.entry) || 0) + 1);
+        bump(e.feed, AUTHORITY_SIGNALS.card, e.ts);
+        if (p.terms) pulls.push({ kind: "card", terms: p.terms });
         break;
       case "dwell":
         dwell.set(e.entry, (dwell.get(e.entry) || 0) + (p.ms || 0));
@@ -112,6 +117,6 @@ export function derive(events, now) {
   return {
     dismissed: new Set([...dismissed].filter(([, v]) => v).map(([k]) => k)),
     saved: new Set([...saved].filter(([, v]) => v).map(([k]) => k)),
-    opens, dwell, authorityDelta: Object.fromEntries(authority), training, pulls
+    opens, cards, dwell, authorityDelta: Object.fromEntries(authority), training, pulls
   };
 }

@@ -1,8 +1,6 @@
 import { Engine } from "./src/engine.js";
 import { DwellTracker } from "./src/dwell.js";
-import { Miniflux } from "./src/miniflux.js";
-import { WebDav } from "./src/webdav.js";
-import { Raindrop } from "./src/raindrop.js";
+import { makeHandlers } from "./src/handlers.js";
 
 const storage = { get: (k) => browser.storage.local.get(k), set: (o) => browser.storage.local.set(o) };
 const dwell = new DwellTracker();
@@ -65,47 +63,13 @@ browser.tabs.onRemoved.addListener(async (tabId) => {
   if (r) await engine.recordDwell(r.meta.id, r.meta.feedId, r.ms);
 });
 
-async function testConnection(which) {
-  const s = engine.settings;
-  try {
-    if (which === "miniflux") { const me = await new Miniflux({ baseUrl: s.miniflux.url, token: s.miniflux.token }).me(); return { ok: true, sentence: `Connected to Miniflux as ${me.username}.` }; }
-    if (which === "webdav") { await new WebDav({ baseUrl: s.webdav.url, user: s.webdav.user, pass: s.webdav.pass }).list(s.webdav.root || "pravaha"); return { ok: true, sentence: "The WebDAV storage answered and accepted the login." }; }
-    if (which === "raindrop") { const t = await new Raindrop({ token: s.raindrop.token }).tags(); return { ok: true, sentence: `Raindrop answered; ${t.length} tags found.` }; }
-  } catch (e) { return { ok: false, sentence: e.plain || "The test failed for an unexpected reason." }; }
-  return { ok: false, sentence: "Unknown test." };
-}
-
-const handlers = {
-  boot: async () => ({ settings: engine.settings, tree: engine.tree(), status: engine.status(), rules: engine.trainingRules() }),
-  view: async (m) => ({ view: engine.getView(m.params), tree: engine.tree(), status: engine.status() }),
-  markRead: (m) => engine.markRead(m.ids, { explicit: !!m.explicit }),
-  markUnread: (m) => engine.markUnread(m.ids),
-  open: async (m) => {
-    const r = await engine.open(m.id); if (!r) return null;
-    const tab = await browser.tabs.create({ url: r.url, active: false });
-    dwell.track(tab.id, { id: m.id, feedId: r.feedId }, Date.now(), false); await saveDwell(); return true;
-  },
-  save: (m) => engine.toggleSave(m.id),
-  dismiss: (m) => engine.dismiss(m.id),
-  undismissAll: () => engine.undismissAll(),
-  train: (m) => engine.train(m.kind, m.key, m.value),
-  rules: async () => engine.trainingRules(),
-  suggestTags: async (m) => engine.suggestTagsFor(m.id),
-  syncNow: async () => { await runSync(); return engine.status(); },
-  status: async () => engine.status(),
-  stats: async () => engine.stats(),
-  digest: async () => { try { const r = await engine.writeDigest(); return { ok: true, sentence: `Wrote the digest for ${r.week} to the WebDAV folder.` }; } catch (e) { return { ok: false, sentence: e.plain || "The digest could not be written." }; } },
-  test: (m) => testConnection(m.which),
-  saveSettings: async (m) => {
-    await engine.saveSettings(m.patch); await schedule();
-    try {
-      const s = engine.settings;
-      if (s.syncCreds) await browser.storage.sync.set({ pravahaCreds: { miniflux: s.miniflux, webdav: s.webdav, raindrop: s.raindrop } });
-      else await browser.storage.sync.remove("pravahaCreds");
-    } catch { /* ignore */ }
-    runSync(); return engine.settings;
+const handlers = makeHandlers({
+  engine, runSync, schedule,
+  openTab: async (r, id) => { const tab = await browser.tabs.create({ url: r.url, active: false }); dwell.track(tab.id, { id, feedId: r.feedId }, Date.now(), false); await saveDwell(); },
+  saveSynced: async (s) => {
+    try { if (s.syncCreds) await browser.storage.sync.set({ pravahaCreds: { miniflux: s.miniflux, webdav: s.webdav, raindrop: s.raindrop } }); else await browser.storage.sync.remove("pravahaCreds"); } catch { /* ignore */ }
   }
-};
+});
 browser.runtime.onMessage.addListener((m) => {
   if (!m || !handlers[m.type]) return;
   return ready.then(() => handlers[m.type](m));

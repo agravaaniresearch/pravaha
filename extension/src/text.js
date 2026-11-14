@@ -28,6 +28,7 @@ export function domainOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
+export function wordCount(html) { const m = String(html || "").replace(/<[^>]*>/g, " ").match(/\S+/g); return m ? m.length : 0; }
 export function firstParagraph(html, max = 320) {
   const plain = String(html || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
   return plain.length > max ? plain.slice(0, max - 1).trimEnd() + "…" : plain;

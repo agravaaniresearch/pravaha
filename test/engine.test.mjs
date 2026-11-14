@@ -1,31 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Engine, MemoryStorage } from "../extension/src/engine.js";
-import { makeDav, makeMiniflux, makeRaindrop, router, feed, entry, settings } from "./helpers.mjs";
+import { world, ids } from "./helpers.mjs";
 
-async function world({ flaky = {} } = {}) {
-  const ctl = { mfDown: false, davDown: false, rdDown: false };
-  const dav = makeDav({ faults: () => (ctl.davDown ? "throw" : null) });
-  const mf = makeMiniflux({ faults: () => (ctl.mfDown ? "throw" : null) });
-  const rd = makeRaindrop({ faults: () => (ctl.rdDown ? "throw" : null), bookmarks: [
-    ...Array.from({ length: 24 }, (_, i) => ({ _id: i, title: `Navy frigate shipyard programme ${i}`, excerpt: "warship naval defence procurement", note: "", tags: ["defence", "shipbuilding"], link: `https://navalnews.example/${i}`, lastUpdate: new Date().toISOString() })),
-    ...Array.from({ length: 6 }, (_, i) => ({ _id: 100 + i, title: `Fiscal budget deficit ${i}`, excerpt: "tax economy", note: "", tags: ["economy"], link: `https://econ.example/${i}`, lastUpdate: new Date().toISOString() }))] });
-  mf.st.feeds = [feed(1, "Naval Wire", "Defence/Shipbuilding"), feed(2, "Kitchen Daily", "Food"), feed(3, "Broken Feed", "Food", { parsing_error_count: 9 })];
-  mf.st.entries = [
-    entry(1, 1, "Navy orders new frigates from shipyard", "The defence ministry procurement of warship frigates continues.", 3),
-    entry(2, 2, "Ten lemon cake recipes for spring", "Baking and dessert ideas for your kitchen.", 1),
-    entry(3, 3, "Broken feed naval frigate story", "naval shipyard", 1),
-    entry(4, 1, "Fiscal deficit widens as tax receipts fall", "economy budget", 30)];
-  for (const e of mf.st.entries) e.feed = { id: e.feed_id, title: mf.st.feeds.find(f => f.id === e.feed_id).title, category: mf.st.feeds.find(f => f.id === e.feed_id).category };
-  const fetchImpl = router({ dav, mf, rd });
-  const mk = async (device, over = {}) => {
-    const storage = new MemoryStorage(); await storage.set({ settings: settings(device, over) });
-    const changes = { n: 0 }; const e = new Engine({ storage, fetchImpl, onChange: () => { changes.n++; }, platform: { echoDocs: async () => [{ title: "Navy frigate shipyard news", url: "https://navalnews.example/x", visits: 5 }] } });
-    await e.load(); return { e, storage, changes };
-  };
-  return { ctl, dav, mf, rd, mk, fetchImpl };
-}
-const ids = (v) => v.groups.flatMap(g => g.rows.map(r => r.id));
 
 test("sync pulls feeds and unread, builds the nested tree and groups by feed", async () => {
   const w = await world(); const { e } = await w.mk("laptop"); await e.syncNow();

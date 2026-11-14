@@ -1,6 +1,6 @@
 // The engine: owns state, talks to Miniflux, Raindrop and WebDAV, scores items, records events.
 // Nothing here touches browser globals directly; the background page injects everything.
-import { tokenize, domainOf, firstParagraph } from "./text.js";
+import { tokenize, domainOf, firstParagraph, wordCount } from "./text.js";
 import { Corpus, cosine, blend, mean, prune, topTerms } from "./vector.js";
 import { scoreItem, DEFAULT_WEIGHTS, normaliseWeights, whyRanked, authorityOf } from "./scoring.js";
 import { EventLog, Clock, derive } from "./eventlog.js";
@@ -22,6 +22,10 @@ export const DEFAULT_SETTINGS = {
 const DAY = 86400000;
 const UNREAD_CAP = 3000;
 
+const mediaKind = (encs) => { const m = (encs || []).map(x => String(x.mime_type || "")).find(t => /^(audio|video)\//.test(t)); return m ? m.split("/")[0] : null; };
+const ICON_RE = /^image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/i;
+const BODY_CAP = 150;
+
 export class Engine {
   constructor({ storage, now = () => Date.now(), fetchImpl, platform = {}, onChange = () => {} }) {
     this.storage = storage; this.now = now; this.fetchImpl = fetchImpl; this.platform = platform; this.onChange = onChange;
@@ -30,7 +34,7 @@ export class Engine {
 
   // ---------- persistence ----------
   async load() {
-    const s = await this.storage.get(["settings", "cache", "events", "syncState", "pendingOps", "raindropCache", "echoLocal", "enrichment", "net", "others", "pendingHistory"]);
+    const s = await this.storage.get(["settings", "cache", "events", "syncState", "pendingOps", "raindropCache", "echoLocal", "enrichment", "net", "others", "pendingHistory", "bodies", "icons"]);
     this.settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
     this.settings.miniflux = { ...DEFAULT_SETTINGS.miniflux, ...(this.settings.miniflux || {}) };
     this.settings.webdav = { ...DEFAULT_SETTINGS.webdav, ...(this.settings.webdav || {}) };
@@ -40,7 +44,7 @@ export class Engine {
     this.cache = { items: {}, feeds: [], lastChangeTs: 0, lastDigestAt: 0, lastDigestTerms: [], ...(s.cache || {}) };
     this.pendingOps = (s.pendingOps || []).map(o => ({ ...o, inflight: false })); this.raindropCache = s.raindropCache || null; this.echoLocal = s.echoLocal || null;
     this.enrichment = s.enrichment || {}; this.net = s.net || { miniflux: {}, webdav: {}, raindrop: {} };
-    this.others = s.others || {}; this.pendingHistory = s.pendingHistory || [];
+    this.bodies = s.bodies || {}; this.icons = s.icons || {}; this.sessionCards = new Set(); this.others = s.others || {}; this.pendingHistory = s.pendingHistory || [];
     this.log = new EventLog(this.settings.device, new Clock(this.settings.device, this.now));
     this.log.merge(s.events || []);
     this.syncState = s.syncState || freshSyncState();
@@ -87,7 +91,7 @@ export class Engine {
     const weights = bms.map(b => Math.pow(0.5, Math.max(0, now - (b.at || now)) / (365 * DAY)));
     let centroid = prune(mean(vecs, weights), 500);
     const d = this._derive();
-    for (const p of d.pulls) centroid = blend(centroid, corpus.vector(p.terms), p.kind === "save" ? 0.12 : 0.05);
+    for (const p of d.pulls) centroid = blend(centroid, corpus.vector(p.terms), p.kind === "save" ? 0.12 : p.kind === "card" ? 0.02 : 0.05);
     const echo = this._echoMerged(corpus);
     this._model = { corpus, centroid, echo: echo.vec, domainVisits: echo.domainVisits, profiles: buildTagProfiles(bms, corpus) };
     return this._model;
@@ -121,7 +125,9 @@ export class Engine {
     return { ...prev, id: e.id, feedId: e.feed_id || feed.id, feedTitle: feed.title || prev.feedTitle || "Unknown feed",
       category: (feed.category && feed.category.title) || prev.category || "Uncategorised",
       title: e.title || "(untitled)", summary: firstParagraph(e.content, 320), publishedAt: Date.parse(e.published_at) || prev.publishedAt || 0,
-      author: e.author || null, url: e.url, domain: domainOf(e.url), tags: e.tags || [], status: e.status, starred: !!e.starred, readingTime: e.reading_time || 0 };
+      author: e.author || null, url: e.url, domain: domainOf(e.url), tags: e.tags || [], status: e.status, starred: !!e.starred, readingTime: e.reading_time || 0,
+      words: e.content ? wordCount(e.content) : (prev.words || 0), thumb: (/<img[^>]+src=["'](https:\/\/[^"']{1,300})["']/i.exec(e.content || "") || [])[1] || prev.thumb || null,
+      media: mediaKind(e.enclosures) || prev.media || null, comments: e.comments_url || prev.comments || null };
   }
   _pendingIds() { const s = new Set(); for (const o of this.pendingOps) { if (o.op === "status") o.ids.forEach(i => s.add(i)); else s.add(o.id); } return s; }
 
@@ -159,7 +165,7 @@ export class Engine {
     try {
       await this.flushOps();
       const feeds = await this.mf.feeds();
-      this.cache.feeds = feeds.map(f => ({ id: f.id, title: f.title, category: (f.category && f.category.title) || "Uncategorised", health: feedHealth(f, this.now()) }));
+      this.cache.feeds = feeds.map(f => ({ id: f.id, title: f.title, category: (f.category && f.category.title) || "Uncategorised", health: feedHealth(f, this.now()), siteUrl: f.site_url || "", iconId: f.icon ? f.icon.icon_id : null, checkedAt: f.checked_at || null }));
       const un = await this.mf.allUnread(UNREAD_CAP);
       const capped = un.entries.length >= UNREAD_CAP && un.total > un.entries.length;
       const pend = this._pendingIds(); const serverIds = new Set();
@@ -181,7 +187,7 @@ export class Engine {
   _retain() {
     const cut = this.now() - this.settings.retentionDays * DAY; const d = this._derive();
     for (const it of Object.values(this.cache.items))
-      if (it.status === "read" && !it.starred && !d.opens.has(it.id) && it.publishedAt < cut) delete this.cache.items[it.id];
+      if (it.status === "read" && !it.starred && !d.opens.has(it.id) && !d.cards.has(it.id) && it.publishedAt < cut) delete this.cache.items[it.id];
   }
 
   // ---------- Raindrop and echo ----------
@@ -211,6 +217,7 @@ export class Engine {
   // ---------- sync ----------
   async syncNow() {
     await this.refresh();
+    await this.refreshIcons();
     await this.refreshRaindrop();
     await this.refreshEcho();
     if (this.syncer) {
@@ -268,6 +275,7 @@ export class Engine {
     }
     return [...nodes.values()].sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
   }
+  unreadCount() { const d = this._derive(); return Object.values(this.cache.items).filter(i => i.status === "unread" && !d.dismissed.has(i.id)).length; }
   getView({ scope = "all", mode = "unread", ranked = false, q = "", keep = [] } = {}) {
     const d = this._derive(); const ctx = this._scoreCtx(); const keepSet = new Set(keep); const meta = this._feedMeta();
     const ql = q.trim().toLowerCase(); const dead = new Set(this.cache.feeds.filter(f => f.health.dead).map(f => f.id));
@@ -280,7 +288,7 @@ export class Engine {
     const rows = items.map(it => {
       const s = this.scoreOne(it, ctx);
       return { id: it.id, feedId: it.feedId, feedTitle: it.feedTitle, title: it.title, summary: it.summary, url: it.url, publishedAt: it.publishedAt, read: it.status === "read", saved: it.starred,
-        score: s.score, why: whyRanked(s.breakdown), breakdown: s.breakdown, flag: s.flag, author: it.author, readingTime: it.readingTime, dead: dead.has(it.feedId) };
+        score: s.score, why: whyRanked(s.breakdown), breakdown: s.breakdown, flag: s.flag, author: it.author, readingTime: it.readingTime, dead: dead.has(it.feedId), domain: it.domain, tags: it.tags || [], words: it.words || 0, thumb: it.thumb || null, media: it.media || null, comments: it.comments || null, newish: it.publishedAt > this.now() - 3 * 3600000 };
     });
     let groups;
     if (ranked) {
@@ -291,7 +299,7 @@ export class Engine {
       groups = [...by.entries()].map(([id, rs]) => ({ key: "feed:" + id, feedId: Number(id), title: rs[0].feedTitle, unread: rs.filter(x => !x.read).length, rows: rs.sort((a, b) => b.publishedAt - a.publishedAt) }))
         .sort((a, b) => a.title.localeCompare(b.title));
     }
-    return { groups, total: rows.length, unreadTotal: Object.values(this.cache.items).filter(i => i.status === "unread" && !d.dismissed.has(i.id)).length, dismissedCount: d.dismissed.size };
+    return { groups, total: rows.length, unreadTotal: Object.values(this.cache.items).filter(i => i.status === "unread" && !d.dismissed.has(i.id)).length, dismissedCount: d.dismissed.size, iconCount: Object.keys(this.icons).length };
   }
   suggestTagsFor(id) { const it = this.cache.items[id]; if (!it) return []; const v = this._itemVec(it); return suggestTags(v.vec, v.stems, this._buildModel().profiles); }
 
@@ -309,6 +317,54 @@ export class Engine {
     for (const id of ids) { const it = this.cache.items[id]; if (it) it.status = "unread"; }
     this._queue({ op: "status", ids: [...ids], status: "unread" }); await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
   }
+  // The reader opened the article as an in-page card. A light positive signal, logged once per session.
+  async openCard(id) {
+    const it = this.cache.items[id]; if (!it) return;
+    if (!this.sessionCards.has(id)) { this.sessionCards.add(id); this._evt(it, "card"); }
+    this.sessionFeeds.add(it.feedId);
+    if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
+    await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
+  }
+  async _saveBodies() {
+    const keys = Object.keys(this.bodies);
+    if (keys.length > BODY_CAP) for (const k of keys.sort((a, b) => this.bodies[a].at - this.bodies[b].at).slice(0, keys.length - BODY_CAP)) delete this.bodies[k];
+    await this.storage.set({ bodies: this.bodies });
+  }
+  // The article body for the card: what Miniflux holds for the entry, fetched on demand and kept for the last 150 cards.
+  async getContent(id) {
+    const it = this.cache.items[id]; if (!it) return { html: null, error: "That article is no longer in the local copy." };
+    const b = this.bodies[id]; if (b) return { html: b.html, full: b.full };
+    if (!this.mf) return { html: null, error: "Miniflux is not set up, so only the summary is available." };
+    try {
+      const e = await this.mf.entry(id); const html = e.content || "";
+      this.bodies[id] = { html, full: false, at: this.now() }; await this._saveBodies(); return { html, full: false };
+    } catch (err) { return { html: null, error: err instanceof PlainError ? err.plain : "The article text could not be loaded. Showing the summary instead." }; }
+  }
+  // Ask Miniflux to download the original page and extract the whole article (the "coffee cup" action).
+  async fetchFull(id) {
+    if (!this.mf) return { ok: false, sentence: "Miniflux is not set up yet." };
+    try {
+      const r = await this.mf.fetchContent(id); const html = (r && r.content) || "";
+      if (!html.trim()) return { ok: false, sentence: "Miniflux could not extract the full article from that page." };
+      this.bodies[id] = { html, full: true, at: this.now() }; await this._saveBodies();
+      const it = this.cache.items[id]; if (it) { it.words = wordCount(html); await this.persist(["cache"]); }
+      return { ok: true, html, full: true };
+    } catch (err) { return { ok: false, sentence: err instanceof PlainError ? err.plain : "The full article could not be fetched. Try again shortly." }; }
+  }
+  // Feed icons come from Miniflux itself, so no request goes to a third-party icon service.
+  async refreshIcons() {
+    if (!this.mf) return;
+    const need = this.cache.feeds.filter(f => f.iconId && this.icons[f.id] === undefined).slice(0, 25);
+    if (!need.length) return;
+    for (let i = 0; i < need.length; i += 5) {
+      await Promise.all(need.slice(i, i + 5).map(async (f) => {
+        try { const r = await this.mf.feedIcon(f.id); this.icons[f.id] = r && ICON_RE.test(r.data || "") ? "data:" + r.data : ""; }
+        catch (e) { if (e.code === "bad-reply") this.icons[f.id] = ""; }
+      }));
+    }
+    await this.storage.set({ icons: this.icons });
+  }
+
   async open(id) {
     const it = this.cache.items[id]; if (!it) return null;
     this._evt(it, "open"); this.sessionFeeds.add(it.feedId);
@@ -341,7 +397,12 @@ export class Engine {
   async undismissAll() {
     const d = this._derive();
     for (const id of d.dismissed) { const it = this.cache.items[id]; this.log.append("undismiss", { entry: id, feed: it && it.feedId }); }
-    this._derived = null; this._model = null; await this.persist(); this.onChange();
+    this._derived = null; this._model = null;
+    // Dismissing marked the articles read in Miniflux, so undoing has to bring them back as unread.
+    const back = [...d.dismissed].filter(id => this.cache.items[id] && this.cache.items[id].status === "read");
+    for (const id of back) this.cache.items[id].status = "unread";
+    if (back.length) this._queue({ op: "status", ids: back, status: "unread" });
+    await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
   }
   async train(type, key, value) { this.log.append("train", { payload: { type, key: String(key).toLowerCase(), value } }); this._derived = null; this._model = null; await this.persist(["events"]); this.onChange(); }
   trainingRules() { return this._derive().training; }
@@ -350,9 +411,9 @@ export class Engine {
   stats() {
     const now = this.now(), d = this._derive(), events = this.log.list().filter(e => now - Number(e.ts.split(".")[0]) < 30 * DAY);
     const cat = {}; const meta = this._feedMeta();
-    let opens = 0, saves = 0, dismisses = 0, dwellMs = 0;
+    let opens = 0, cards = 0, saves = 0, dismisses = 0, dwellMs = 0;
     for (const e of events) {
-      if (e.type === "open") opens++; else if (e.type === "dismiss") dismisses++; else if (e.type === "dwell") dwellMs += (e.payload && e.payload.ms) || 0;
+      if (e.type === "open") opens++; else if (e.type === "card") cards++; else if (e.type === "dismiss") dismisses++; else if (e.type === "dwell") dwellMs += (e.payload && e.payload.ms) || 0;
       else if (e.type === "save") { saves++; const c = splitCategory((meta[e.feed] && meta[e.feed].category) || "Other")[0]; cat[c] = (cat[c] || 0) + 1; }
     }
     const bands = [[0, .15], [.15, .3], [.3, .45], [.45, 1.01]].map(([lo, hi]) => ({ lo, hi: Math.min(hi, 1), n: 0, opened: 0, saved: 0 }));
@@ -360,7 +421,7 @@ export class Engine {
     for (const it of Object.values(this.cache.items)) { const s = this.scoreOne(it, ctx).score; const b = bands.find(x => s >= x.lo && s < x.hi) || bands[3]; b.n++; if (d.opens.has(it.id)) b.opened++; if (it.starred) b.saved++; }
     const league = this.cache.feeds.map(f => ({ id: f.id, title: f.title, authority: authorityOf(d.authorityDelta[f.id] || 0), health: f.health.state }))
       .sort((a, b) => b.authority - a.authority).slice(0, 12);
-    return { opens, saves, dismisses, dwellMinutes: Math.round(dwellMs / 60000), savesByFolder: Object.entries(cat).sort((a, b) => b[1] - a[1]), bands, league, pendingHistory: this.pendingHistory };
+    return { opens, cards, saves, dismisses, dwellMinutes: Math.round(dwellMs / 60000), savesByFolder: Object.entries(cat).sort((a, b) => b[1] - a[1]), bands, league, pendingHistory: this.pendingHistory };
   }
   async writeDigest() {
     if (!this.dav) throw new PlainError("The digest needs the WebDAV storage to be set up first.", "not-configured");

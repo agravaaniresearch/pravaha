@@ -10,13 +10,15 @@ This is a design review of a personal tool, not legal advice.
 - **Credentials.** The Miniflux key, WebDAV app password and Raindrop token are stored in the extension's local storage, which Firefox keeps unencrypted in the profile folder. Anyone with access to the profile can read them. Use a Fastmail app password limited to Files, and a Miniflux key you can revoke. Syncing keys through Firefox Sync is optional and off by default.
 - **Outside scoring.** `enrich/outbox.json` holds titles, summaries and links of borderline articles and the top terms of the interest profile. If the user connects an outside assistant, those leave the user's storage. Turning this on is the user's decision, and the file contains no credentials.
 
+- **Thumbnails and images.** When thumbnails or article images are shown, the browser loads them from the publisher's site, which reveals the user's IP address to that site. Thumbnails can be turned off in Settings. Feed icons come from Miniflux, not from publishers.
+
 ## Third-party terms
 
 - **Miniflux.** Uses the documented REST API with a personal API key. Polling is every two minutes by default against the user's own account, which is within normal use for a hosted account. Raise the interval if the host asks.
 - **Raindrop.** Uses the official REST API with a personal test token. Reading is paged and cached for a day. Saving is one way. The claim that Raindrop generates tags with a local model is unconfirmed, so Pravaha does its own local tag matching instead.
 - **Fastmail.** Uses WebDAV with an app password, as Fastmail documents for Files.
 - **Mozilla.** Distributed as a self-signed (unlisted) add-on, which Mozilla's terms allow. It is not listed on addons.mozilla.org, so it does not go through listed-add-on review.
-- **Publishers.** Pravaha shows Miniflux's own content and links out to the original page. It does not bypass paywalls and does not scrape. "Fetch full content" is a Miniflux feature and is not used here.
+- **Publishers.** Pravaha shows Miniflux's own content and links out to the original page. It does not bypass paywalls and does not scrape. The full-article button asks Miniflux to fetch the page, using Miniflux's own content fetcher from the user's own server, only when the user presses it. Pravaha never requests the publisher's page itself.
 
 ## Behavioural risks of ranking
 
@@ -27,9 +29,9 @@ This is a design review of a personal tool, not legal advice.
 
 ## Security review
 
-- All user content is inserted with `textContent`, never `innerHTML`, so a hostile feed cannot inject script into the reader screen.
+- UI text is inserted as text nodes. Article HTML is rebuilt by an allowlist sanitiser (`src/safehtml.js`) that parses it into an inert document and copies only known tags and attributes into DOM nodes. Scripts, frames, forms, styles, SVG, event handlers, `javascript:` and `data:` links, and `srcset` are dropped. Links get `noopener`. There is a node limit. `innerHTML` is never used.
 - The extension page's content security policy is Firefox's default for extensions, which blocks inline and remote script.
-- Article links open in a background tab with a normal browser navigation. The reader does not render remote HTML.
+- Article links open in a background tab with a normal browser navigation. Card content is Miniflux's HTML after sanitising.
 - Host permissions are limited to the three default services. Other servers need an explicit prompt.
 - The WebDAV client builds URLs from path segments with encoding, so a hostile file name cannot escape the folder.
 - Corrupted or malicious lines in another machine's log are validated and skipped. They cannot execute and cannot overwrite local state, because merging only adds events with valid shape.

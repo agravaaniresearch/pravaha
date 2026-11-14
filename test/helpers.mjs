@@ -1,3 +1,4 @@
+import { Engine, MemoryStorage } from "../extension/src/engine.js";
 // Shared fakes: an in-memory WebDAV server, Miniflux and Raindrop, all behind one fetch function.
 export function makeDav({ faults = () => null } = {}) {
   const files = new Map(); const dirs = new Set([""]);
@@ -42,6 +43,8 @@ export function makeMiniflux({ faults = () => null } = {}) {
     if (path === "/entries" && m === "PUT") { const b = JSON.parse(opts.body); for (const e of st.entries) if (b.entry_ids.includes(e.id)) e.status = b.status; return new Response(null, { status: 204 }); }
     let mm;
     if ((mm = path.match(/^\/entries\/(\d+)\/bookmark$/))) { const e = st.entries.find(x => x.id === Number(mm[1])); e.starred = !e.starred; return new Response(null, { status: 204 }); }
+    if ((mm = path.match(/^\/entries\/(\d+)\/fetch-content$/))) { const e = st.entries.find(x => x.id === Number(mm[1])); return e ? json({ content: e.full_content || "<p>The complete article text, fetched from the original page.</p>" }) : new Response("", { status: 404 }); }
+    if ((mm = path.match(/^\/feeds\/(\d+)\/icon$/))) { const f = st.feeds.find(x => x.id === Number(mm[1])); return f && f.icon ? json({ id: f.icon.icon_id, data: "image/png;base64,iVBORw0KGgo=", mime_type: "image/png" }) : new Response("", { status: 404 }); }
     if ((mm = path.match(/^\/entries\/(\d+)$/))) { const e = st.entries.find(x => x.id === Number(mm[1])); return e ? json(e) : new Response("", { status: 404 }); }
     return new Response("", { status: 404 });
   };
@@ -82,3 +85,27 @@ export const settings = (device, over = {}) => ({
   device, miniflux: { url: "https://mf.test", token: "good-key" }, webdav: { url: "https://dav.test", user: "u", pass: "p", root: "pravaha" },
   raindrop: { token: "rd-token" }, retentionDays: 30, ...over
 });
+
+export async function world({ flaky = {} } = {}) {
+  const ctl = { mfDown: false, davDown: false, rdDown: false };
+  const dav = makeDav({ faults: () => (ctl.davDown ? "throw" : null) });
+  const mf = makeMiniflux({ faults: () => (ctl.mfDown ? "throw" : null) });
+  const rd = makeRaindrop({ faults: () => (ctl.rdDown ? "throw" : null), bookmarks: [
+    ...Array.from({ length: 24 }, (_, i) => ({ _id: i, title: `Navy frigate shipyard programme ${i}`, excerpt: "warship naval defence procurement", note: "", tags: ["defence", "shipbuilding"], link: `https://navalnews.example/${i}`, lastUpdate: new Date().toISOString() })),
+    ...Array.from({ length: 6 }, (_, i) => ({ _id: 100 + i, title: `Fiscal budget deficit ${i}`, excerpt: "tax economy", note: "", tags: ["economy"], link: `https://econ.example/${i}`, lastUpdate: new Date().toISOString() }))] });
+  mf.st.feeds = [feed(1, "Naval Wire", "Defence/Shipbuilding"), feed(2, "Kitchen Daily", "Food"), feed(3, "Broken Feed", "Food", { parsing_error_count: 9 })];
+  mf.st.entries = [
+    entry(1, 1, "Navy orders new frigates from shipyard", "The defence ministry procurement of warship frigates continues.", 3),
+    entry(2, 2, "Ten lemon cake recipes for spring", "Baking and dessert ideas for your kitchen.", 1),
+    entry(3, 3, "Broken feed naval frigate story", "naval shipyard", 1),
+    entry(4, 1, "Fiscal deficit widens as tax receipts fall", "economy budget", 30)];
+  for (const e of mf.st.entries) e.feed = { id: e.feed_id, title: mf.st.feeds.find(f => f.id === e.feed_id).title, category: mf.st.feeds.find(f => f.id === e.feed_id).category };
+  const fetchImpl = router({ dav, mf, rd });
+  const mk = async (device, over = {}) => {
+    const storage = new MemoryStorage(); await storage.set({ settings: settings(device, over) });
+    const changes = { n: 0 }; const e = new Engine({ storage, fetchImpl, onChange: () => { changes.n++; }, platform: { echoDocs: async () => [{ title: "Navy frigate shipyard news", url: "https://navalnews.example/x", visits: 5 }] } });
+    await e.load(); return { e, storage, changes };
+  };
+  return { ctl, dav, mf, rd, mk, fetchImpl };
+}
+export const ids = (v) => v.groups.flatMap(g => g.rows.map(r => r.id));

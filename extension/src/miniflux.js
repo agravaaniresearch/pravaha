@@ -28,6 +28,7 @@ export class Miniflux {
   me() { return this.call("GET", "/me"); }
   feeds() { return this.call("GET", "/feeds"); }
   categories() { return this.call("GET", "/categories"); }
+  feedIcon(id) { return this.call("GET", `/feeds/${id}/icon`); }
   counters() { return this.call("GET", "/feeds/counters"); }
   entries(params = {}) {
     const q = new URLSearchParams(); for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) q.set(k, String(v));
