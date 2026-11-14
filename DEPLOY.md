@@ -42,6 +42,17 @@ The second machine uses the same Miniflux, WebDAV and folder settings with its o
 - **Obsidian.** Point your vault's sync at the `digests` folder inside the WebDAV folder. One Markdown file appears per ISO week.
 - **Grok or another assistant.** Pravaha writes `enrich/outbox.json` with borderline articles. An automation can write `enrich/results.json` in the documented shape (see SCHEMA.md). The reader blends it in at its next sync. Nothing leaves your storage unless your own automation sends it.
 
+## 5b. Updating from 0.2.x to 0.3.0
+
+Install the new `.xpi` over the old one, as in step 3. Settings, history and the saved order stay. What is new on first start:
+
+- Firefox will ask to approve one new permission, **menus**, for the right-click item "Find feeds here with Pravaha". It cannot read pages.
+- The first refresh builds the search index from the articles already cached. Articles read before the update are findable only while they remain in the cache; the index keeps them for 400 days from then on.
+- The first bulk mark-read afterwards does a check against Miniflux, which fetches the unread list once more than before. On a very large unread backlog that is a few extra requests.
+- Nothing in WebDAV changes. The event log, state files and digests are unchanged, so 0.2.x and 0.3.0 can run on two machines at once.
+
+To go back, install the older `.xpi` over this one. The extra storage keys (`searchIndex`, `cache.recent`, `settings.treeOrder`) are ignored by older versions.
+
 ## 6. Backups and recovery
 
 - Miniflux holds the read state and stars. Export OPML from Miniflux for the feeds.

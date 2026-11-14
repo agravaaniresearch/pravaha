@@ -31,6 +31,15 @@ try:
         k = pg.locator(".conn").first.locator("input").nth(1); k.fill("wrong-key"); pg.wait_for_timeout(1500)
         pg.locator(".conn").first.locator("input").nth(1).fill("good-key"); pg.wait_for_timeout(1500); shot(pg, "08-settings-inline-test")
         pg, _ = page(prefs(theme="light"), 390, 800); shot(pg, "09-narrow-window")
+        # 0.3.0
+        pg, _ = page(prefs(theme="dark")); pg.locator(".search input").fill("frigate shipyrd"); pg.wait_for_timeout(900); shot(pg, "10-search")
+        pg, _ = page(prefs(theme="dark")); pg.evaluate("window.__mf.st.delay = 2500"); pg.keyboard.press("Shift+M"); pg.wait_for_timeout(500); pg.locator("[data-act='confirm']").screenshot(path=os.path.join(OUT, "_tmp.png")); os.remove(os.path.join(OUT, "_tmp.png"))
+        shot(pg, "11-confirm-mark-all"); pg.locator("[data-act='confirm']").click(); pg.wait_for_timeout(1300); shot(pg, "12-syncing-with-miniflux")
+        pg, _ = page(prefs(theme="dark")); pg.evaluate("window.__mf.st.delay = 0"); pg.keyboard.press("Shift+A"); pg.wait_for_timeout(400); pg.locator("[data-act='confirm']").click(); pg.wait_for_timeout(2200); shot(pg, "13-toast-with-undo")
+        pg, _ = page(prefs(theme="dark")); pg.locator("[data-act='reorder']").click(); pg.wait_for_timeout(300); pg.locator(".trow[data-id='cat:Food'] [data-mv='up']").click(); pg.wait_for_timeout(1300); shot(pg, "14-reorder-folders")
+        pg, _ = page(prefs(theme="dark")); pg.keyboard.press("a"); pg.wait_for_timeout(300); pg.locator(".dialog .urlrow input").fill("harbourweekly.example"); pg.locator("[data-act='find']").click(); pg.wait_for_timeout(700); pg.locator(".feedopt input").first.check(); pg.wait_for_timeout(200); shot(pg, "15-add-feed")
+        pg, _ = page(prefs(theme="light", anchor=True, readFont="sourceserif")); pg.locator(".row .rtitle").first.click(); pg.wait_for_timeout(900); shot(pg, "16-bionic-button-and-fonts")
+        pg, _ = page(prefs(theme="dark")); pg.locator(".tab", has_text="Settings").click(); pg.wait_for_timeout(400); pg.locator(".stab", has_text="Look").click(); pg.wait_for_timeout(500); shot(pg, "17-settings-fonts-and-confirm")
         b.close()
 finally:
     srv.terminate()

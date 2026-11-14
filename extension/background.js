@@ -51,6 +51,22 @@ browser.action.onClicked.addListener(async () => {
   else await browser.tabs.create({ url });
 });
 
+// Right-click on a page or a link: open the reader's Add feed dialog with that address filled in.
+function openSubscribe(target) {
+  const base = browser.runtime.getURL("ui/reader.html");
+  return browser.tabs.query({ url: base }).then(async (tabs) => {
+    const url = base + "#subscribe=" + encodeURIComponent(target);
+    if (tabs.length) { await browser.tabs.update(tabs[0].id, { url, active: true }); await browser.windows.update(tabs[0].windowId, { focused: true }); }
+    else await browser.tabs.create({ url });
+  });
+}
+browser.runtime.onInstalled.addListener(() => {
+  browser.menus.removeAll().then(() => browser.menus.create({ id: "pravaha-find-feeds", title: "Find feeds here with Pravaha", contexts: ["page", "link"] }));
+});
+browser.menus.onClicked.addListener((info) => {
+  const target = info.linkUrl || info.pageUrl; if (info.menuItemId === "pravaha-find-feeds" && /^https?:/i.test(target || "")) openSubscribe(target);
+});
+
 browser.tabs.onActivated.addListener(async ({ tabId }) => { await ready; dwell.setActive(tabId, Date.now()); await saveDwell(); });
 browser.windows.onFocusChanged.addListener(async (winId) => {
   await ready;

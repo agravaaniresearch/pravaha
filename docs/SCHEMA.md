@@ -60,9 +60,38 @@ with outside score s:  final = 0.8*final + 0.2*s
 
 ## Local storage keys
 
-`settings`, `cache` (articles and feeds), `bodies` (article HTML fetched on demand, trimmed with the cache), `icons` (feed icons as data URLs), `events`, `syncState`, `pendingOps` (Miniflux changes waiting to send), `raindropCache`, `echoLocal`, `enrichment`, `net`, `others`, `pendingHistory`. Dwell tracker state is kept in `storage.session` because the background page can unload.
+`settings`, `cache` (articles, feeds, and `recent`), `bodies` (article HTML fetched on demand, trimmed with the cache), `icons` (feed icons as data URLs), `searchIndex`, `events`, `syncState`, `pendingOps` (Miniflux changes waiting to send), `raindropCache`, `echoLocal`, `enrichment`, `net`, `others`, `pendingHistory`. Dwell tracker state is kept in `storage.session` because the background page can unload.
 
+### `pendingOps`
 
-Interface preferences (theme, palette, density, thumbnails, read on scroll, reading type, anchor bolding and strength) and collapsed feeds live in the reader page's `localStorage` under `pravaha.ui` and `pravaha.collapsed`. They stay on the machine and are not synced.
+An array of changes waiting for Miniflux, oldest first. `{op:"status", ids:[...], status:"read"|"unread"}` or `{op:"bookmark", id, desired}`. A status op is sent in chunks of 150 ids. After each chunk that Miniflux accepts, those ids are removed from the op, so a retry resends only what has not arrived. An op being sent is marked `inflight` in memory only and is never merged into.
 
-Bundled fonts, all under the SIL Open Font Licence (licences are in `extension/ui/fonts/`): IBM Plex Sans for the interface, Newsreader and Literata for reading.
+### `cache.recent`
+
+`{ "<entryId>": { t, n } }`. The articles marked read on this machine in the last ten minutes: `t` is when, `n` is how many times a refresh has sent the read again. If a refresh finds one of them still unread on Miniflux, it queues the read again instead of reverting the local copy, up to three times (`n`), then believes Miniflux. Marking an article unread removes it. The window is ten minutes so that a deliberate "mark unread" made on another machine is not fought over for long.
+
+### `searchIndex`
+
+`{ "<entryId>": { id, fi, f, t, g, k, s, p, u, c } }`: feed id, feed title, title, tags, keywords, a 200 character summary, published time (ms), article URL and folder. `k` holds about fourteen keywords from the full text, added when the article body has been loaded. The index is kept for 400 days (`settings.searchKeepDays`) for articles that have left the reading cache, never for more than 20,000 entries, and it is local to the machine: it is not written to WebDAV. Opening an indexed article that is no longer cached fetches it from Miniflux again.
+
+### `settings` additions in 0.3.0
+
+`treeOrder`: `{ "<parent folder id or root>": ["<child id>", ...] }`. The saved order of folders and feeds within each parent. Anything not listed follows alphabetically after the listed ones, and folders always come before feeds. It is part of `settings`, so it travels with the other settings if the user turns on credential sync only in that the settings are saved together; it is not written to WebDAV.
+
+`searchKeepDays`: days to keep articles in the search index after they leave the reading cache. Default 400.
+
+### Status report
+
+`status()` now also returns `activity` (`null` or `{kind, label, done, total}` with kind `push`, `pull`, `verify`, `search`, `discover` or `subscribe`) and `pendingCount` (ids waiting for Miniflux). Rows in a view carry `pending: true` while their change is waiting. Nothing about these is stored.
+
+### Interface preferences
+
+Interface preferences (theme, palette, density, thumbnails, read on scroll, reading font, interface font, confirm mark read, reading size, line gap, width, Bionic reading and its strength) and collapsed feeds live in the reader page's `localStorage` under `pravaha.ui` and `pravaha.collapsed`. They stay on the machine and are not synced.
+
+### Fonts
+
+Bundled fonts, all under the SIL Open Font Licence (licences are in `extension/ui/fonts/`). Reading: Newsreader, Literata, Source Serif 4, Lora, Crimson Pro, Merriweather, Atkinson Hyperlegible, plus the system serif. Interface: IBM Plex Sans, Source Sans 3, Atkinson Hyperlegible, plus the system sans. Only the Latin subset of each is bundled.
+
+## Miniflux calls
+
+Read: `/me`, `/feeds`, `/categories`, `/entries` (with `status`, `starred`, `changed_after` and, for older articles, `search`), `/entries/{id}`, `/feeds/{id}/icon`. Write: `PUT /entries` (status, in chunks of 150), `PUT /entries/{id}/bookmark`, `GET /entries/{id}/fetch-content`. New in 0.3.0: `POST /discover` and `POST /feeds` and `POST /categories`, only when the user presses Find feeds, Subscribe or a new folder name.

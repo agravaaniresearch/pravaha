@@ -23,7 +23,7 @@ export function makeDav({ faults = () => null } = {}) {
 }
 
 export function makeMiniflux({ faults = () => null } = {}) {
-  const st = { feeds: [], entries: [], calls: [] };
+  const st = { feeds: [], entries: [], calls: [], puts: [], cats: [], discover: {}, flaky: null, delay: 0, stale: null, nextFeed: 100, nextCat: 50 };
   const handler = async (url, opts = {}) => {
     const f = faults(opts.method, url); if (f === "throw") throw new TypeError("network down"); if (typeof f === "number") return new Response("", { status: f });
     const u = new URL(url); const path = u.pathname.replace(/^\/v1/, ""); const m = opts.method || "GET"; st.calls.push(`${m} ${path}`);
@@ -31,16 +31,33 @@ export function makeMiniflux({ faults = () => null } = {}) {
     const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s });
     if (path === "/me") return json({ id: 1, username: "ap" });
     if (path === "/feeds" && m === "GET") return json(st.feeds);
+    if (path === "/categories" && m === "GET") { if (!st.cats.length) { const seen = new Map(); for (const f of st.feeds) if (!seen.has(f.category.title)) seen.set(f.category.title, seen.size + 1); st.cats = [...seen].map(([title, id]) => ({ id, title })); } return json(st.cats); }
+    if (path === "/categories" && m === "POST") { const b = JSON.parse(opts.body); if (!st.cats.length) { const seen = new Map(); for (const f of st.feeds) if (!seen.has(f.category.title)) seen.set(f.category.title, seen.size + 1); st.cats = [...seen].map(([title, id]) => ({ id, title })); } const c = { id: st.nextCat++, title: b.title }; st.cats.push(c); return json(c, 201); }
+    if (path === "/discover" && m === "POST") { const b = JSON.parse(opts.body); const r = st.discover[b.url]; return r ? json(r) : json({ error_message: "Unable to find any subscription on that page." }, 500); }
+    if (path === "/feeds" && m === "POST") {
+      const b = JSON.parse(opts.body); if (st.feeds.some(f => f.feed_url === b.feed_url)) return json({ error_message: "This feed already exists." }, 400);
+      const cat = st.cats.find(c => c.id === b.category_id); const id = st.nextFeed++;
+      st.feeds.push(feed(id, `New feed ${id}`, cat ? cat.title : "All", { feed_url: b.feed_url, site_url: "https://new.example" }));
+      st.entries.push({ ...entry(900 + id, id, `First article of new feed ${id}`, "Fresh content.", 1), feed: { id, title: `New feed ${id}`, category: { title: cat ? cat.title : "All" } } });
+      return json({ feed_id: id }, 201);
+    }
     if (path === "/entries" && m === "GET") {
       let es = st.entries.slice(); const q = u.searchParams;
       if (q.get("status")) es = es.filter(e => e.status === q.get("status"));
       if (q.get("starred") === "true") es = es.filter(e => e.starred);
+      if (q.get("search")) { const w = q.get("search").toLowerCase(); es = es.filter(e => `${e.title} ${e.content}`.toLowerCase().includes(w)); }
+      if (st.stale && q.get("status") === "unread") { const snap = st.stale; st.stale = null; await snap.waitFor(); es = snap.entries; }
       if (q.get("changed_after")) es = es.filter(e => (e.changed_at || 0) > Number(q.get("changed_after")));
       es.sort((a, b) => (Date.parse(b.published_at) - Date.parse(a.published_at)));
       const off = Number(q.get("offset") || 0), lim = Number(q.get("limit") || 100);
       return json({ total: es.length, entries: es.slice(off, off + lim) });
     }
-    if (path === "/entries" && m === "PUT") { const b = JSON.parse(opts.body); for (const e of st.entries) if (b.entry_ids.includes(e.id)) e.status = b.status; return new Response(null, { status: 204 }); }
+    if (path === "/entries" && m === "PUT") {
+      const b = JSON.parse(opts.body); st.puts.push(b.entry_ids.length); if (st.delay) await new Promise(r => setTimeout(r, st.delay));
+      const skip = st.flaky && st.flaky.times > 0 ? st.flaky.ids : null; if (skip && b.entry_ids.some(i => skip.has(i))) st.flaky.times--;
+      for (const e of st.entries) if (b.entry_ids.includes(e.id) && !(skip && skip.has(e.id))) e.status = b.status;
+      return new Response(null, { status: 204 });
+    }
     let mm;
     if ((mm = path.match(/^\/entries\/(\d+)\/bookmark$/))) { const e = st.entries.find(x => x.id === Number(mm[1])); e.starred = !e.starred; return new Response(null, { status: 204 }); }
     if ((mm = path.match(/^\/entries\/(\d+)\/fetch-content$/))) { const e = st.entries.find(x => x.id === Number(mm[1])); return e ? json({ content: e.full_content || "<p>The complete article text, fetched from the original page.</p>" }) : new Response("", { status: 404 }); }

@@ -3,10 +3,14 @@ import { h, icon, pct, ago, longAgo } from "./dom.js";
 import { gradeColor, disp } from "../src/grade.js";
 import { renderSafe } from "../src/safehtml.js";
 import { anchorTree } from "../src/anchor.js";
-import { loadPrefs, savePrefs, applyPrefs, clamp } from "./prefs.js";
+import { loadPrefs, savePrefs, applyPrefs, clamp, READ_FONTS, UI_FONTS, CONFIRM_MODES } from "./prefs.js";
 
 const $app = document.getElementById("app");
-const send = async (m) => { try { return await browser.runtime.sendMessage(m); } catch (e) { toast("The background page did not answer. Reload the extension if this keeps happening."); throw e; } };
+const MUTATING = new Set(["markRead", "markUnread", "markScope", "save", "dismiss", "undismissAll", "syncNow", "subscribe", "searchServer", "card", "open"]);
+const send = async (m) => {
+  if (MUTATING.has(m.type)) setTimeout(kickSync, 60);
+  try { return await browser.runtime.sendMessage(m); } catch (e) { toast("The background page did not answer. Reload the extension if this keeps happening.", { kind: "error" }); throw e; }
+};
 const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } };
 
@@ -15,7 +19,7 @@ export const S = {
   settings: null, tree: [], status: null, rules: [], data: null, icons: {}, iconCount: 0, unread: 0,
   rows: new Map(), openCard: null, selId: null, keep: new Set(), content: {}, tags: {}, limits: {},
   collapsed: new Set(lsGet("pravaha.collapsed", [])), auto: new Set(), treeCollapsed: new Set(lsGet("pravaha.treeCollapsed", [])),
-  newIds: new Set(), pop: null, help: false, toast: "", busy: false, stats: null,
+  newIds: new Set(), pop: null, help: false, toast: "", busy: false, stats: null, searchIn: "all", reorder: false, dialog: null, syncFlash: 0,
   stab: "connections", draft: null, tests: {}, dirty: false
 };
 let U = loadPrefs();
@@ -23,14 +27,24 @@ const prefersDark = () => !!(window.matchMedia && window.matchMedia("(prefers-co
 const setPref = (patch) => { U = { ...U, ...patch }; savePrefs(U); applyPrefs(U, document.documentElement, prefersDark()); if ("anchor" in patch || "anchorLevel" in patch) { refillOpenCard(); anchorSamples(); } };
 function anchorSamples() { for (const el of $app.querySelectorAll("[data-sample]")) { el.textContent = el.dataset.sample; if (U.anchor) anchorTree(el, U.anchorLevel, document); } }
 function refillOpenCard() { const r = S.openCard && S.rows.get(S.openCard); if (r && rowElById(r.id)) fillCard(r); }
-export const disposeForTests = () => { clearTimeout(toastTimer); };
+export const disposeForTests = () => { clearTimeout(pollT); for (const t of toastTimers) clearTimeout(t); };
 
 // ---------- small utilities ----------
-let toastTimer = null;
-function toast(t) {
-  S.toast = t; let el = $app.querySelector(".toast");
-  if (!el) { el = h("div", { class: "toast", role: "status" }); $app.append(el); }
-  el.textContent = t; clearTimeout(toastTimer); toastTimer = setTimeout(() => { S.toast = ""; el.remove(); }, 3600);
+const toastTimers = new Set();
+const TOAST_ICON = { success: "ok", info: "info", warn: "warn", error: "warn" };
+// Toasts live outside the app container, so a redraw of the page never wipes one. Newest sits at the bottom.
+function toast(text, o = {}) {
+  const kind = o.kind || "info"; S.toast = text;
+  let box = document.querySelector(".toasts"); if (!box) { box = h("div", { class: "toasts", "aria-live": "polite", role: "status" }); document.body.append(box); }
+  for (const old of [...box.children]) if (old.dataset.text === text) old.remove();
+  while (box.children.length >= 4) box.firstChild.remove();
+  let timer = null; const el = h("div", { class: "toast", "data-kind": kind, "data-text": text });
+  const close = () => { clearTimeout(timer); toastTimers.delete(timer); el.dataset.leaving = "true"; setTimeout(() => el.remove(), 220); };
+  el.append(...[icon(TOAST_ICON[kind] || "info", 18), h("span", { class: "tmsg" }, text),
+    o.action ? h("button", { class: "tact", onclick: () => { close(); o.action.fn(); } }, o.action.label) : null,
+    h("button", { class: "tx", "aria-label": "Dismiss", onclick: close }, icon("x", 14))].filter(Boolean));
+  box.append(el); timer = setTimeout(close, o.ms || (o.action ? 8000 : kind === "error" || kind === "warn" ? 6500 : 3800)); toastTimers.add(timer);
+  return close;
 }
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 const iconFor = (feedId, title) => {
@@ -45,7 +59,17 @@ const groupOf = (id) => (S.data ? S.data.groups.find(g => g.rows.some(r => r.id 
 const isCollapsed = (key) => S.collapsed.has(key) || S.auto.has(key);
 
 // ---------- data ----------
+const searchQuery = () => { const q = S.q.trim(); return /(^|\s)in:\w+/i.test(q) || S.searchIn === "all" ? q : `${q} in:${S.searchIn}`; };
+async function loadSearch() {
+  const [r, t] = await Promise.all([send({ type: "search", q: searchQuery() }), send({ type: "tree" })]);
+  S.tree = t.tree; S.status = t.status; S.unread = t.unreadTotal;
+  S.data = { search: true, terms: r.terms || [], indexSize: r.indexSize, empty: r.empty, groups: r.rows.length ? [{ key: "search", search: true, title: "Search results", unread: r.rows.filter(x => !x.read).length, rows: r.rows }] : [], total: r.rows.length, unreadTotal: S.unread, dismissedCount: 0, iconCount: S.iconCount };
+  S.rows = new Map(); for (const row of r.rows) S.rows.set(row.id, row);
+  if (S.openCard && !S.rows.has(S.openCard)) stopDwell(), S.openCard = null;
+  render();
+}
 async function loadView() {
+  if (S.q.trim()) return loadSearch();
   const r = await send({ type: "view", params: { scope: S.tab === "saved" ? "saved" : S.scope, mode: S.mode, ranked: S.ranked, q: S.q, keep: [...S.keep] } });
   S.data = r.view; S.tree = r.tree; S.status = r.status; S.unread = r.view.unreadTotal; S.newIds = new Set();
   S.rows = new Map(); for (const g of S.data.groups) for (const row of g.rows) S.rows.set(row.id, row);
@@ -60,6 +84,7 @@ async function boot() {
   if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyPrefs(U, document.documentElement, prefersDark()));
   if (!b.settings.miniflux.token) S.tab = "settings";
   if (isFeedTab()) await loadView(); else render();
+  handleHash(); kickSync();
 }
 // Cheap refresh of counts and lights after local actions.
 const refreshChrome = debounce(async () => {
@@ -67,23 +92,69 @@ const refreshChrome = debounce(async () => {
 }, 350);
 // Background updates: patch rows in place and offer new articles through a banner, never reshuffling under the reader.
 const softReload = debounce(async () => {
+  if (S.data && S.data.search && isFeedTab()) {
+    refreshChrome(); const rs = await send({ type: "search", q: searchQuery() });
+    for (const n of rs.rows) { const old = S.rows.get(n.id); if (old && (old.read !== n.read || old.saved !== n.saved)) { Object.assign(old, { read: n.read, saved: n.saved }); patchRow(old); } }
+    return;
+  }
   if (!isFeedTab() || !S.data) { refreshChrome(); if (S.tab === "sync") { S.status = await send({ type: "status" }); S.stats = await send({ type: "stats" }); renderMain(); } return; }
   const r = await send({ type: "view", params: { scope: S.tab === "saved" ? "saved" : S.scope, mode: S.mode, ranked: S.ranked, q: S.q, keep: [...S.keep] } });
   S.tree = r.tree; S.status = r.status; S.unread = r.view.unreadTotal; let fresh = 0;
   for (const g of r.view.groups) for (const n of g.rows) {
     const old = S.rows.get(n.id);
     if (!old) { if (!S.newIds.has(n.id)) fresh++; S.newIds.add(n.id); continue; }
-    if (old.read !== n.read || old.saved !== n.saved || old.score !== n.score) { Object.assign(old, { read: n.read, saved: n.saved, score: n.score, why: n.why, breakdown: n.breakdown, flag: n.flag }); patchRow(old); }
+    if (old.read !== n.read || old.saved !== n.saved || old.score !== n.score || old.pending !== n.pending) { Object.assign(old, { read: n.read, saved: n.saved, score: n.score, why: n.why, breakdown: n.breakdown, flag: n.flag, pending: n.pending }); patchRow(old); }
   }
   if (r.view.iconCount !== S.iconCount) { S.iconCount = r.view.iconCount; S.icons = (await send({ type: "icons" })) || {}; }
   renderChrome(); showBanner();
 }, 400);
-browser.runtime.onMessage.addListener((m) => { if (m && m.type === "changed") softReload(); });
+browser.runtime.onMessage.addListener((m) => { if (m && m.type === "changed") { softReload(); kickSync(); } });
+
+// ---------- sync indicator ----------
+let pollT = null, wasBusy = false;
+const mfRed = () => !!(S.status && S.status.lights && S.status.lights.some(l => l.id === "miniflux" && l.state === "red"));
+const isBusy = () => S.busy || !!(S.status && (S.status.activity || (S.status.pendingCount > 0 && !mfRed())));
+async function pollSync() {
+  pollT = null; try { S.status = await send({ type: "status" }); } catch { return; }
+  const busy = isBusy(); renderIndicator();
+  if (busy) { wasBusy = true; pollT = setTimeout(pollSync, 700); }
+  else { clearPendingDots(); if (wasBusy && !mfRed()) { wasBusy = false; S.syncFlash = Date.now() + 2600; renderIndicator(); toastTimers.add(setTimeout(renderIndicator, 2700)); } else wasBusy = false; }
+}
+function kickSync() { if (!pollT) pollT = setTimeout(pollSync, 120); }
+function clearPendingDots() { for (const r of S.rows.values()) if (r.pending) { r.pending = false; const el = rowElById(r.id); if (el) { el.dataset.pending = "false"; el.querySelector(".pdot")?.remove(); } } }
+function pillEl() {
+  const st = S.status; const overall = st ? st.overall : "off"; const a = st && st.activity; const pend = st ? st.pendingCount || 0 : 0;
+  let state = "idle"; let text = overall === "green" ? "In sync" : overall === "red" ? "Needs attention" : overall === "amber" ? "Catching up" : "Not set up"; let sub = ""; let lamp = h("span", { class: "lamp " + overall + (overall === "green" ? " pulse" : "") });
+  if (a || S.busy) { state = "syncing"; text = a ? a.label : "Syncing with Miniflux"; sub = a && a.total ? `${Math.min(a.done, a.total)} of ${a.total}` : ""; lamp = h("span", { class: "spin" }); }
+  else if (pend > 0 && !mfRed()) { state = "syncing"; text = "Sending to Miniflux"; sub = `${pend} waiting`; lamp = h("span", { class: "spin" }); }
+  else if (S.syncFlash > Date.now()) { state = "synced"; text = "Synced with Miniflux"; lamp = icon("check", 14); }
+  return h("button", { class: "pill", "data-state": state, title: st ? "Open the Sync page" : "", onclick: () => go("sync") }, lamp, h("span", { class: "ptext" }, text), sub ? h("span", { class: "sub2" }, sub) : null);
+}
+function progressEl() {
+  const a = S.status && S.status.activity; const on = !!(a || S.busy); const det = !!(a && a.total > 0);
+  return h("div", { class: "progress", role: "progressbar", "aria-label": "Syncing with Miniflux", "aria-hidden": on ? null : "true", "data-on": String(on), "data-mode": det ? "determinate" : "indeterminate" }, h("i", { style: det ? { width: Math.round(Math.min(1, a.done / a.total) * 100) + "%" } : {} }));
+}
+function renderIndicator() { const p = $app.querySelector(".pill"); if (p) p.replaceWith(pillEl()); const b = $app.querySelector(".progress"); if (b) b.replaceWith(progressEl()); }
+
+// ---------- dialogs ----------
+function dialogHost() { let d = document.querySelector(".dialogs"); if (!d) { d = h("div", { class: "dialogs" }); document.body.append(d); } return d; }
+function closeDialog() { S.dialog = null; S.dialogCancel = null; dialogHost().replaceChildren(); }
+function askConfirm({ title, body, confirmLabel = "OK", cancelLabel = "Cancel" }) {
+  return new Promise((resolve) => {
+    S.dialog = "confirm"; const done = (v) => { closeDialog(); resolve(v); }; S.dialogCancel = () => done(false);
+    const ok = h("button", { class: "btn primary", "data-act": "confirm", onclick: () => done(true) }, confirmLabel);
+    dialogHost().replaceChildren(h("div", { class: "overlay", onclick: () => done(false) }, h("div", { class: "dialog narrow", role: "alertdialog", "aria-label": title, onclick: (e) => e.stopPropagation() },
+      h("h2", {}, title), h("p", {}, body), h("div", { class: "dfoot" }, h("button", { class: "btn", "data-act": "cancel", onclick: () => done(false) }, cancelLabel), ok))));
+    ok.focus();
+  });
+}
+const confirmIf = (kind, body) => { const m = U.confirmRead; return m === "never" || (m === "bulk" && kind === "single") ? Promise.resolve(true) : askConfirm({ title: "Mark as read?", body, confirmLabel: "Mark read" }); };
 
 // ---------- actions ----------
 function patchRow(r) {
   const el = rowElById(r.id); if (!el) return;
-  el.dataset.read = String(r.read); el.dataset.saved = String(r.saved);
+  el.dataset.read = String(r.read); el.dataset.saved = String(r.saved); el.dataset.pending = String(!!r.pending);
+  const pd = el.querySelector(".pdot"); if (r.pending && !pd) { const nd = el.querySelector(".newdot"); if (nd) nd.after(h("span", { class: "pdot", title: "Sending to Miniflux" })); } else if (!r.pending && pd) pd.remove();
   const g = gradeOf(r.score); el.style.setProperty("--grade", g.bg); el.style.setProperty("--gfg", g.fg);
   const sc = el.querySelector(".score"); if (sc) sc.textContent = String(pct(g.d)); const bar = el.querySelector(".gbar i"); if (bar) bar.style.width = pct(g.d) + "%";
   const sv = el.querySelector("[data-act='save']"); if (sv) { sv.replaceChildren(icon("star", 17, r.saved)); sv.setAttribute("aria-pressed", String(r.saved)); sv.title = r.saved ? "Remove from saved (s)" : "Save (s)"; }
@@ -91,16 +162,39 @@ function patchRow(r) {
   const cs = el.querySelector("[data-act='cardsave'] span"); if (cs) cs.textContent = r.saved ? "Saved" : "Save";
   const gr = groupOf(r.id); if (gr) updateGroupHead(gr);
 }
-function markRowsRead(ids, explicit = false) {
+function markRowsLocal(ids) {
   const fresh = ids.filter(id => S.rows.get(id) && !S.rows.get(id).read);
-  for (const id of fresh) { const r = S.rows.get(id); r.read = true; S.keep.add(id); patchRow(r); }
-  if (ids.length) { send({ type: "markRead", ids, explicit }); refreshChrome(); }
+  for (const id of fresh) { const r = S.rows.get(id); r.read = true; r.pending = true; S.keep.add(id); patchRow(r); }
+  return fresh;
 }
-async function markUnread(id) { const r = S.rows.get(id); if (!r) return; r.read = false; patchRow(r); send({ type: "markUnread", ids: [id] }); refreshChrome(); }
-function toggleRead(r) { if (r.read) markUnread(r.id); else markRowsRead([r.id], true); }
+function markRowsRead(ids, explicit = false) { if (!ids.length) return; markRowsLocal(ids); send({ type: "markRead", ids, explicit }); refreshChrome(); }
+async function markUnread(id) { const r = S.rows.get(id); if (!r) return; r.read = false; r.pending = true; patchRow(r); send({ type: "markUnread", ids: [id] }); refreshChrome(); }
+async function toggleRead(r) {
+  if (r.read) return markUnread(r.id);
+  if (!(await confirmIf("single", `Mark “${r.title}” as read?`))) return; markRowsRead([r.id], true);
+}
+async function undoRead(ids) {
+  for (const id of ids) { const r = S.rows.get(id); if (r) { r.read = false; r.pending = true; patchRow(r); } }
+  await send({ type: "markUnread", ids }); S.auto.clear(); toast(`Put ${ids.length} ${ids.length === 1 ? "article" : "articles"} back as unread.`, { kind: "success" }); refreshChrome(); if (isFeedTab()) loadView();
+}
+function reportRead(res) {
+  if (!res || !res.count) return toast("Nothing to mark: everything here is already read.", { kind: "info" });
+  const n = res.count; const word = n === 1 ? "article" : "articles"; const undo = res.ids && res.ids.length ? { label: "Undo", fn: () => undoRead(res.ids) } : null;
+  if (res.verified && !res.retried) toast(`Marked ${n} ${word} read. Miniflux confirmed.`, { kind: "success", action: undo });
+  else if (res.verified) toast(`Marked ${n} ${word} read. ${res.retried} needed a second try, and Miniflux now confirms all of them.`, { kind: "success", action: undo });
+  else if (res.failed) toast(`Marked ${n} ${word} read here. ${res.failed} have not reached Miniflux yet and will be retried.`, { kind: "warn", action: { label: "Sync now", fn: syncNow } });
+  else toast(`Marked ${n} ${word} read. Miniflux has not confirmed yet; the sync light will show if anything is left.`, { kind: "warn" });
+}
+// A bulk mark goes by scope, so it covers every unread article in the section or folder, not only the rows on screen.
+async function bulkRead(rowIds, scope) {
+  markRowsLocal(rowIds); refreshChrome();
+  let res = null; try { res = await send(scope ? { type: "markScope", scope } : { type: "markRead", ids: rowIds, verify: true }); } catch { return null; }
+  reportRead(res); return res;
+}
 async function saveRow(r) {
+  if (r.indexOnly && !(await restoreRow(r))) return;
   r.saved = !r.saved; patchRow(r); const res = await send({ type: "save", id: r.id });
-  if (res && res.saved) toast(res.tags && res.tags.length ? `Saved. Suggested tags: ${res.tags.join(", ")}.` : "Saved."); refreshChrome();
+  if (res && res.saved) toast(res.tags && res.tags.length ? `Saved. Suggested tags: ${res.tags.join(", ")}.` : "Saved.", { kind: "success" }); refreshChrome();
 }
 function dismissRow(r) {
   const el = rowElById(r.id); const g = groupOf(r.id);
@@ -108,17 +202,17 @@ function dismissRow(r) {
   if (el) { el.style.maxHeight = el.offsetHeight + "px"; requestAnimationFrame(() => { el.dataset.leaving = "true"; }); setTimeout(() => el.remove(), 260); }
   if (g) { g.rows = g.rows.filter(x => x.id !== r.id); updateGroupHead(g); }
   S.rows.delete(r.id); if (S.data) S.data.dismissedCount = (S.data.dismissedCount || 0) + 1; const oldSub = $app.querySelector(".sub"); if (oldSub) oldSub.replaceWith(feedSub());
-  send({ type: "dismiss", id: r.id }); toast("Dismissed. The feed's standing drops a little. Undo dismissed is in the toolbar."); refreshChrome();
+  send({ type: "dismiss", id: r.id }); toast("Dismissed. The feed's standing drops a little.", { kind: "info", action: { label: "Undo", fn: async () => { await send({ type: "undismissAll" }); S.auto.clear(); loadView(); } } }); refreshChrome();
 }
 // Background open: a real tab, counted as an open (the strongest everyday signal).
 async function backgroundOpen(r) {
-  r.read = true; S.keep.add(r.id); patchRow(r); await send({ type: "open", id: r.id }); toast("Opened in a background tab and counted as interest."); refreshChrome();
+  r.read = true; S.keep.add(r.id); patchRow(r); await send({ type: "open", id: r.id }); toast("Opened in a background tab and counted as interest.", { kind: "success" }); refreshChrome();
 }
 async function fetchFull(r) {
   if (S.openCard !== r.id) await openCardFor(r);
   S.content[r.id] = { ...(S.content[r.id] || {}), loading: true }; fillCard(r);
   const res = await send({ type: "fetchFull", id: r.id });
-  if (res && res.ok) { S.content[r.id] = { html: res.html, full: true }; toast("Full article loaded."); }
+  if (res && res.ok) { S.content[r.id] = { html: res.html, full: true }; toast("Full article loaded.", { kind: "success" }); }
   else { S.content[r.id] = { ...(S.content[r.id] || {}), loading: false, notice: (res && res.sentence) || "The full article could not be fetched." }; }
   fillCard(r);
 }
@@ -133,8 +227,16 @@ function resumeDwell() { if (dw.id !== null && !dw.start && document.visibilityS
 document.addEventListener("visibilitychange", () => (document.visibilityState === "hidden" ? stopDwell() : resumeDwell()));
 window.addEventListener("blur", stopDwell); window.addEventListener("focus", resumeDwell); window.addEventListener("pagehide", () => { stopDwell(); dw.id = null; });
 
+// An article only the search index remembers is fetched from Miniflux again before it can be opened or saved.
+async function restoreRow(r) {
+  if (!r.indexOnly) return true;
+  const ok = await send({ type: "restore", id: r.id });
+  if (!ok) { toast("That article is no longer stored here and Miniflux could not be reached. Opening it on the web instead.", { kind: "warn" }); if (r.url) window.open(r.url, "_blank", "noopener"); return false; }
+  r.indexOnly = false; const el = rowElById(r.id); el?.querySelector(".chip.idx")?.remove(); return true;
+}
 async function openCardFor(r) {
   if (S.openCard === r.id) return closeCard(r);
+  if (r.indexOnly && !(await restoreRow(r))) return;
   if (S.openCard && S.rows.get(S.openCard)) closeCard(S.rows.get(S.openCard), true);
   S.openCard = r.id; selectRow(r.id);
   if (!r.read) { r.read = true; S.keep.add(r.id); patchRow(r); }
@@ -173,6 +275,7 @@ function fillCard(r) {
     h("div", { class: "cmeta" }, h("span", { class: "fav-wrap", style: { display: "inline-flex", alignItems: "center", gap: "6px" } }, iconFor(r.feedId, r.feedTitle), r.feedTitle), r.author ? h("span", {}, r.author) : null, h("span", {}, longAgo(r.publishedAt)),
       r.readingTime ? h("span", {}, `${r.readingTime} min read`) : null, c.full ? h("span", { class: "chip ok" }, icon("coffee", 12), "Full article") : null),
     h("div", { class: "cacts" },
+      h("button", { class: "btn small bionic" + (U.anchor ? " on" : ""), "data-act": "bionic", "aria-pressed": String(U.anchor), title: "Bionic reading: bold the start of each word (Shift+B)", onclick: toggleBionic }, h("b", {}, "B"), h("span", {}, "Bionic"), h("kbd", {}, "Shift+B")),
       btn("bg", "ext", "Open in background", "b", () => backgroundOpen(r)),
       btn("full", "coffee", c.full ? "Reload full article" : "Fetch full article", "w", () => fetchFull(r), c.loading),
       btn("cardsave", "star", r.saved ? "Saved" : "Save", "s", () => saveRow(r), r.saved),
@@ -190,21 +293,28 @@ function fillCard(r) {
 
 // ---------- feed view ----------
 function selectRow(id) { S.selId = id; for (const e of $app.querySelectorAll(".row[data-sel='true']")) e.dataset.sel = "false"; const el = rowElById(id); if (el) el.dataset.sel = "true"; }
+// Search terms are highlighted in titles and excerpts of the results.
+function hl(text) {
+  const terms = S.data && S.data.search ? (S.data.terms || []).filter(t => t.length > 1) : []; if (!terms.length || !text) return text;
+  const re = new RegExp("(" + terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "giu"); const out = []; let last = 0;
+  text.replace(re, (m, _g, off) => { if (off > last) out.push(text.slice(last, off)); out.push(h("mark", {}, m)); last = off + m.length; return m; });
+  if (last < text.length) out.push(text.slice(last)); return out.length ? out : text;
+}
 function rowEl(r) {
   const g = gradeOf(r.score); const ranked = S.ranked; const small = h("span", { class: "sep" }, "·");
   const meta = [ranked ? h("span", { class: "src" }, iconFor(r.feedId, r.feedTitle), " ", r.feedTitle) : null, r.author ? h("span", {}, r.author) : null, r.domain ? h("span", {}, r.domain) : null, h("span", { title: new Date(r.publishedAt).toLocaleString() }, ago(r.publishedAt)), r.readingTime ? h("span", {}, `${r.readingTime} min`) : null].filter(Boolean);
   const metaLine = []; meta.forEach((m, i) => { if (i) metaLine.push(h("span", { class: "sep" }, "·")); metaLine.push(m); });
-  const chips = [r.newish && !r.read ? h("span", { class: "chip ok" }, "New") : null, r.media ? h("span", { class: "chip" }, icon(r.media === "audio" ? "music" : "play", 12), r.media === "audio" ? "Audio" : "Video") : null,
+  const chips = [r.indexOnly ? h("span", { class: "chip idx", title: "Only the search index remembers this article. Opening it fetches it from Miniflux again." }, icon("clock", 12), "Archive") : null, r.newish && !r.read ? h("span", { class: "chip ok" }, "New") : null, r.media ? h("span", { class: "chip" }, icon(r.media === "audio" ? "music" : "play", 12), r.media === "audio" ? "Audio" : "Video") : null,
     r.comments ? h("a", { class: "chip", href: r.comments, target: "_blank", rel: "noopener noreferrer", onclick: (e) => e.stopPropagation() }, icon("msg", 12), "Comments") : null,
     r.flag ? h("span", { class: "chip warn" }, "Serendipity") : null, r.words && r.words < 150 && !r.media ? h("span", { class: "chip", title: "This feed sends only an excerpt. Press w to fetch the full article." }, icon("coffee", 12), "Excerpt") : null,
     ...(r.tags || []).slice(0, 3).map(t => h("span", { class: "chip tag" }, "#" + t))].filter(Boolean);
   const act = (name, ic, title, fn, cls = "") => h("button", { class: "ibtn " + cls, "data-act": name, title, "aria-label": title, onclick: (e) => { e.stopPropagation(); fn(); } }, icon(ic, 17, name === "save" && r.saved));
-  return h("article", { class: "row", data: { id: r.id, read: String(r.read), saved: String(r.saved), sel: String(S.selId === r.id), card: "false" }, style: { "--grade": g.bg, "--gfg": g.fg }, onclick: () => selectRow(r.id) },
+  return h("article", { class: "row", data: { id: r.id, read: String(r.read), saved: String(r.saved), sel: String(S.selId === r.id), card: "false", pending: String(!!r.pending) }, style: { "--grade": g.bg, "--gfg": g.fg }, onclick: () => selectRow(r.id) },
     h("span", { class: "strip", "aria-hidden": "true" }),
     h("div", { class: "rmain" },
-      h("div", { class: "rmeta" }, h("span", { class: "newdot", title: "Unread" }), metaLine),
-      h("button", { class: "rtitle", onclick: (e) => { e.stopPropagation(); openCardFor(r); } }, r.title),
-      r.summary ? h("div", { class: "rsnip" }, r.summary) : null, chips.length ? h("div", { class: "chips" }, chips) : null),
+      h("div", { class: "rmeta" }, h("span", { class: "newdot", title: "Unread" }), r.pending ? h("span", { class: "pdot", title: "Sending to Miniflux" }) : null, metaLine),
+      h("button", { class: "rtitle", onclick: (e) => { e.stopPropagation(); openCardFor(r); } }, hl(r.title)),
+      r.summary ? h("div", { class: "rsnip" }, hl(r.summary)) : null, chips.length ? h("div", { class: "chips" }, chips) : null),
     h("div", { class: "rside" }, U.thumbs && r.thumb ? h("img", { class: "thumb", src: r.thumb, alt: "", loading: "lazy", referrerpolicy: "no-referrer", onerror: (e) => e.target.remove() }) : null,
       h("div", { class: "grade", title: `Relevance ${pct(g.d)} of 100 (raw ${pct(r.score)}; ${r.why})` }, h("span", { class: "score" }, String(pct(g.d))), h("div", { class: "gbar" }, h("i", { style: { width: pct(g.d) + "%" } })))),
     h("div", { class: "acts" }, act("save", "star", r.saved ? "Remove from saved (s)" : "Save (s)", () => saveRow(r), "save"), act("bg", "ext", "Open in a background tab (b)", () => backgroundOpen(r)),
@@ -212,6 +322,7 @@ function rowEl(r) {
     h("div", { class: "cardwrap" }, h("div", { class: "cardin" })));
 }
 function groupHead(g) {
+  if (g.search) return h("header", { class: "ghead", "data-search": "true" }, h("span", { class: "chev" }, icon("search", 16)), h("span", { class: "gtitle" }, `Results for “${S.q.trim()}”`), h("span", { class: "gunread" }, `${g.rows.length} found`));
   const unread = g.rows.filter(r => !r.read); const top = unread.slice().sort((a, b) => b.score - a.score).slice(0, 14);
   const done = unread.length === 0;
   const first = g.rows[0];
@@ -220,7 +331,8 @@ function groupHead(g) {
       h("span", { class: "chev" }, icon("chev", 16)), g.feedId ? iconFor(g.feedId, g.title) : icon("bolt", 16), h("span", { class: "gtitle" }, g.title),
       h("span", { class: "gunread" + (done ? " zero" : "") }, done ? "all read" : `${unread.length} unread`), done ? h("span", { class: "gdone", title: "Read through" }, icon("check", 16)) : null,
       h("span", { class: "ticks", "aria-hidden": "true", title: "Relevance of the unread articles" }, top.map(r => { const gg = gradeOf(r.score); return h("i", { style: { "--c": gg.bg, "--h": Math.max(4, Math.round(4 + gg.d * 10)) + "px" } }); }))),
-    h("button", { class: "btn small ghost", disabled: unread.length ? null : true, onclick: () => markSectionRead(g) }, icon("check", 15), "Mark section read"));
+    h("button", { class: "btn small ghost", title: "Mark the section read (Shift+A)", disabled: unread.length ? null : true, onclick: () => markSectionRead(g) }, icon("check", 15), "Mark section read"),
+    h("span", { class: "gprog", role: "progressbar", "aria-label": "Read in this section", "aria-valuemin": "0", "aria-valuemax": String(g.rows.length), "aria-valuenow": String(g.rows.length - unread.length) }, h("i", { style: { width: (g.rows.length ? Math.round((g.rows.length - unread.length) / g.rows.length * 100) : 0) + "%" } })));
 }
 function updateGroupHead(g) { if (!g.el) return; const old = g.el.querySelector(".ghead"); if (old) old.replaceWith(groupHead(g)); }
 function toggleGroup(g) {
@@ -234,14 +346,28 @@ function setAllGroups(collapse) {
   for (const g of S.data.groups) { S.auto.delete(g.key); collapse ? S.collapsed.add(g.key) : S.collapsed.delete(g.key); if (g.el) { g.el.dataset.collapsed = String(collapse); g.el.querySelector(".gtoggle")?.setAttribute("aria-expanded", String(!collapse)); } }
   lsSet("pravaha.collapsed", [...S.collapsed]); if (collapse && S.openCard) closeCard(S.rows.get(S.openCard), true);
 }
+const foldGroup = (g) => { S.auto.add(g.key); if (g.el) { g.el.dataset.collapsed = "true"; g.el.querySelector(".gtoggle")?.setAttribute("aria-expanded", "false"); } if (S.openCard && g.rows.some(r => r.id === S.openCard)) closeCard(S.rows.get(S.openCard), true); };
+const plural = (n) => `${n} ${n === 1 ? "article" : "articles"}`;
 // Marking a whole section read is the "read through" signal, so the section folds away.
-function markSectionRead(g) {
-  markRowsRead(g.rows.filter(r => !r.read).map(r => r.id));
-  setTimeout(() => { S.auto.add(g.key); if (g.el) { g.el.dataset.collapsed = "true"; g.el.querySelector(".gtoggle")?.setAttribute("aria-expanded", "false"); } if (S.openCard && g.rows.some(r => r.id === S.openCard)) closeCard(S.rows.get(S.openCard), true); }, 380);
+async function markSectionRead(g) {
+  if (!g || g.search) return; const unread = g.rows.filter(r => !r.read); if (!unread.length) return;
+  const scope = g.feedId && !S.ranked ? "feed:" + g.feedId : null; const node = scope && S.tree.find(x => x.id === scope); const n = Math.max(unread.length, node ? node.unread : 0);
+  if (!(await confirmIf("bulk", `Mark ${plural(n)} in “${g.title}” as read?`))) return;
+  setTimeout(() => foldGroup(g), 380); await bulkRead(unread.map(r => r.id), scope);
 }
-function markAllRead() {
-  const ids = []; for (const g of S.data.groups) for (const r of g.rows) if (!r.read) ids.push(r.id);
-  markRowsRead(ids); setTimeout(() => { for (const g of S.data.groups) { S.auto.add(g.key); if (g.el) { g.el.dataset.collapsed = "true"; g.el.querySelector(".gtoggle")?.setAttribute("aria-expanded", "false"); } } }, 380);
+async function markAllRead() {
+  if (!S.data || S.data.search) return; const ids = []; for (const g of S.data.groups) for (const r of g.rows) if (!r.read) ids.push(r.id);
+  const scope = S.tab === "saved" ? null : S.scope; const node = scope && scope !== "all" ? S.tree.find(x => x.id === scope) : null;
+  const n = Math.max(ids.length, scope === "all" ? S.unread : node ? node.unread : 0); if (!n) return toast("Nothing to mark: everything here is already read.", { kind: "info" });
+  const where = !scope || scope === "all" ? "in every folder" : `in “${node ? node.label : "this folder"}”`;
+  if (!(await confirmIf("bulk", `Mark all ${plural(n)} ${where} as read?`))) return;
+  setTimeout(() => { for (const g of S.data.groups) foldGroup(g); }, 380); await bulkRead(ids, scope);
+}
+// The section Shift+A acts on: the selected row's, else the first one on screen that still has unread articles.
+function currentGroup() {
+  const sel = S.rows.get(S.selId); const g = sel && groupOf(sel.id); if (g) return g;
+  const topH = Number(getComputedStyle(document.documentElement).getPropertyValue("--ghead-top").replace("px", "")) || 100;
+  return S.data.groups.find(x => x.el && !isCollapsed(x.key) && x.rows.some(r => !r.read) && x.el.getBoundingClientRect().bottom > topH) || S.data.groups.find(x => x.rows.some(r => !r.read)) || null;
 }
 function fillGroupRows(g, inner) {
   const limit = S.limits[g.key] || 120; inner.replaceChildren(...g.rows.slice(0, limit).map(rowEl));
@@ -256,7 +382,21 @@ function showBanner() {
   const sub = $app.querySelector(".sub"); if (!sub) return;
   sub.after(h("button", { class: "banner", onclick: () => { S.keep = new Set(); loadView(); } }, icon("sync", 15), `${S.newIds.size} new article${S.newIds.size === 1 ? "" : "s"}. Click to show`));
 }
+const clearSearch = () => { S.q = ""; const i = $app.querySelector(".search input"); if (i) i.value = ""; loadView(); };
+async function searchServerNow() {
+  const r = await send({ type: "searchServer", q: S.q }); toast(r.sentence, { kind: r.ok ? "success" : "warn" }); if (r.ok) loadSearch();
+}
+function searchSub() {
+  const d = S.data;
+  return h("div", { class: "sub" }, h("h1", {}, "Search"), h("span", { class: "meta" }, `${d.total} found among ${d.indexSize} articles remembered on this machine`),
+    h("div", { class: "seg", role: "group", "aria-label": "Search in" }, [["all", "Everything"], ["unread", "Unread"], ["read", "Read"], ["saved", "Saved"]].map(([id, l]) => h("button", { "aria-pressed": String(S.searchIn === id), onclick: () => { S.searchIn = id; loadView(); } }, l))),
+    h("button", { class: "btn", title: "Ask Miniflux for older articles that match", onclick: searchServerNow }, icon("search", 15), "Search Miniflux for older"),
+    h("button", { class: "btn ghost", onclick: clearSearch }, icon("x", 15), "Clear"));
+}
+const tips = () => h("details", { class: "tips" }, h("summary", {}, "Search tips"), h("p", {}, "Words are matched loosely, so a misspelling or a different word ending still finds the article. Every word has to match."),
+  h("p", {}, h("code", {}, "#navy"), " matches a tag. ", h("code", {}, "feed:naval"), " limits to one feed. ", h("code", {}, "\"exact phrase\""), " keeps words together. ", h("code", {}, "-word"), " leaves matches out. ", h("code", {}, "in:read"), ", ", h("code", {}, "in:unread"), " or ", h("code", {}, "in:saved"), " pick a state. ", h("code", {}, "since:30d"), " limits to the last 30 days."));
 function feedSub() {
+  if (S.data && S.data.search) return searchSub();
   const d = S.data; const title = S.tab === "saved" ? "Saved" : S.scope === "all" ? "Newsfeed" : (S.tree.find(n => n.id === S.scope) || {}).label || "Newsfeed";
   const allCollapsed = d && d.groups.length && d.groups.every(g => isCollapsed(g.key));
   const sub = h("div", { class: "sub" }, h("h1", {}, title), h("span", { class: "meta" }, d ? `${d.unreadTotal} unread in total · ${d.total} shown` : ""),
@@ -265,13 +405,18 @@ function feedSub() {
     h("div", { class: "seg", role: "group", "aria-label": "Density" }, h("button", { title: "Compact list", "aria-pressed": String(U.density === "compact"), onclick: () => { setPref({ density: "compact" }); render(); } }, icon("list", 15)), h("button", { title: "Comfortable list with excerpts and thumbnails", "aria-pressed": String(U.density !== "compact"), onclick: () => { setPref({ density: "comfortable" }); render(); } }, icon("grid", 15))),
     h("button", { class: "btn" + (U.scrollRead ? " on" : ""), title: "Mark articles read as they scroll past the top of the screen", "aria-pressed": String(U.scrollRead), onclick: () => { setPref({ scrollRead: !U.scrollRead }); toast(U.scrollRead ? "Articles are marked read once they scroll past the top." : "Scroll marking is off."); renderMain(); } }, icon("scroll", 15), "Read on scroll"),
     h("button", { class: "btn", title: allCollapsed ? "Expand every feed (Shift+C)" : "Collapse every feed (Shift+C)", onclick: () => { setAllGroups(!allCollapsed); renderMain(); } }, icon(allCollapsed ? "down2" : "up2", 15), allCollapsed ? "Expand all" : "Collapse all"),
-    h("button", { class: "btn", disabled: d && d.groups.some(g => g.rows.some(r => !r.read)) ? null : true, onclick: markAllRead }, icon("check", 15), "Mark all read"),
+    h("button", { class: "btn", title: "Mark everything unread here as read (Shift+M)", disabled: d && d.groups.some(g => g.rows.some(r => !r.read)) ? null : true, onclick: markAllRead }, icon("check", 15), "Mark all read"),
     d && d.dismissedCount ? h("button", { class: "btn ghost", onclick: async () => { await send({ type: "undismissAll" }); loadView(); } }, icon("undo", 15), `Undo dismissed (${d.dismissedCount})`) : null);
   return sub;
 }
 function feedMain() {
   const d = S.data;
   const sub = feedSub();
+  if (d && d.search) {
+    const body = h("div", { class: "feeds density-" + (U.density === "compact" ? "compact" : "comfortable") }, d.groups.length ? d.groups.map(groupEl)
+      : h("div", { class: "empty" }, h("div", { class: "t" }, d.empty ? "Type something to search" : "Nothing matches"), h("div", {}, d.empty ? "Use words, #tags, feed: names or quotes." : "Try fewer words, or ask Miniflux for older articles with the button above.")), tips());
+    return [sub, body];
+  }
   const body = d && d.groups.length ? h("div", { class: "feeds density-" + (U.density === "compact" ? "compact" : "comfortable") }, d.groups.map(groupEl))
     : h("div", { class: "empty" }, h("div", { class: "t" }, S.tab === "saved" ? "Nothing saved yet" : S.settings.miniflux.token ? "You are all caught up" : "Connect Miniflux to begin"),
       h("div", {}, S.tab === "saved" ? "Press s on an article and it will appear here." : S.settings.miniflux.token ? "No unread articles match this view. Try the All toggle." : "Open Settings and add your server address and API key."));
@@ -306,19 +451,18 @@ function go(tab) {
   else { S.draft = null; render(); }
 }
 function topBar() {
-  const st = S.status; const overall = st ? st.overall : "off";
-  const text = overall === "green" ? "In sync" : overall === "red" ? "Needs attention" : overall === "amber" ? "Catching up" : "Not set up";
   const themeIcon = { light: icon("sun"), dark: icon("moon"), oled: icon("moon", 18, true), auto: icon("clock") }[U.theme];
-  return h("header", { class: "top" },
+  return h("header", { class: "top" }, progressEl(),
     h("button", { class: "ibtn", title: "Show or hide the folder list", "aria-label": "Toggle folders", onclick: () => { setPref({ side: !U.side }); renderChrome(); } }, icon("menu", 20)),
     h("div", { class: "brand" }, h("img", { src: "../icons/icon-32.png", alt: "" }), "Pravaha"),
     h("nav", { class: "tabs", role: "tablist", "aria-label": "Sections" }, TABS.map(([id, label, ic]) => h("button", { class: "tab", role: "tab", "aria-selected": String(S.tab === id), onclick: () => go(id) }, icon(ic, 16), h("span", { class: "lbl" }, label), id === "feed" && S.unread ? h("span", { class: "count" }, S.unread > 999 ? "999+" : S.unread) : null))),
     h("div", { class: "grow" }),
-    isFeedTab() ? h("label", { class: "search" }, icon("search", 15), h("input", { type: "search", placeholder: "Search  ( / )", "aria-label": "Search articles", value: S.q, oninput: debounce((e) => { S.q = e.target.value; loadView(); }, 300) })) : null,
+    isFeedTab() ? h("label", { class: "search" }, icon("search", 15), h("input", { type: "search", placeholder: "Search everything  ( / )", "aria-label": "Search articles", value: S.q, oninput: debounce((e) => { S.q = e.target.value; loadView(); }, 260) })) : null,
+    h("button", { class: "ibtn bionic", "aria-pressed": String(U.anchor), title: "Bionic reading: bold the start of each word (Shift+B)", "aria-label": "Bionic reading", onclick: toggleBionic }, h("b", {}, "B"), h("span", {}, "r")),
     h("button", { class: "ibtn aa", title: "Reading type", "aria-label": "Reading type", "aria-expanded": String(S.pop === "aa"), onclick: (e) => { e.stopPropagation(); S.pop = S.pop === "aa" ? null : "aa"; renderPop(); } }, "Aa"),
     h("button", { class: "ibtn", title: `Theme: ${THEME_NAMES[U.theme]}. Click to change.`, "aria-label": "Change theme", onclick: () => { setPref({ theme: THEMES[(THEMES.indexOf(U.theme) + 1) % THEMES.length] }); renderChrome(); toast("Theme: " + THEME_NAMES[U.theme]); } }, themeIcon),
     h("button", { class: "ibtn", title: "Keyboard shortcuts (?)", "aria-label": "Keyboard shortcuts", onclick: () => { S.help = true; renderOverlay(); } }, icon("help")),
-    h("button", { class: "pill", title: st ? "Open the Sync page" : "", onclick: () => go("sync") }, h("span", { class: "lamp " + overall + (overall === "green" ? " pulse" : "") }), text));
+    pillEl());
 }
 function sideBar() {
   const byId = new Map(S.tree.map(n => [n.id, n]));
@@ -327,17 +471,31 @@ function sideBar() {
   const rows = S.tree.filter(n => !hidden(n)).map(n => {
     const chev = n.type === "folder" && hasKids(n) ? h("button", { class: "chev", "aria-label": (S.treeCollapsed.has(n.id) ? "Expand " : "Collapse ") + n.label, "aria-expanded": String(!S.treeCollapsed.has(n.id)), onclick: () => { S.treeCollapsed.has(n.id) ? S.treeCollapsed.delete(n.id) : S.treeCollapsed.add(n.id); lsSet("pravaha.treeCollapsed", [...S.treeCollapsed]); renderChrome(); } }, icon("chev", 14)) : h("span", { class: "chev" });
     const cur = S.tab === "feed" && S.scope === n.id;
-    return h("div", { class: "trow", style: { paddingLeft: n.depth * 14 + "px" } }, chev, h("button", { class: "tbtn", "aria-current": cur ? "true" : null, onclick: () => { S.scope = n.id; if (S.tab !== "feed") { S.tab = "feed"; lsSet("pravaha.tab", "feed"); } S.keep = new Set(); loadView(); } },
-      n.type === "feed" ? iconFor(Number(n.id.slice(5)), n.label) : null, h("span", { class: "lbl" }, n.label), n.state && n.state !== "green" ? h("span", { class: "dot " + n.state, title: "This feed has trouble in Miniflux" }) : null, n.unread ? h("span", { class: "n" }, n.unread) : null));
+    const mv = S.reorder ? h("span", { class: "mv" },
+      h("button", { title: "Move up", "aria-label": "Move " + n.label + " up", "data-mv": "up", disabled: n.first ? true : null, onclick: () => moveNode(n.id, "up") }, icon("up", 14)),
+      h("button", { title: "Move down", "aria-label": "Move " + n.label + " down", "data-mv": "down", disabled: n.last ? true : null, onclick: () => moveNode(n.id, "down") }, icon("down", 14))) : null;
+    return h("div", { class: "trow", "data-id": n.id, style: { paddingLeft: n.depth * 14 + "px" } }, chev, h("button", { class: "tbtn", "aria-current": cur ? "true" : null, onclick: () => { S.scope = n.id; if (S.tab !== "feed") { S.tab = "feed"; lsSet("pravaha.tab", "feed"); } S.keep = new Set(); loadView(); } },
+      n.type === "feed" ? iconFor(Number(n.id.slice(5)), n.label) : null, h("span", { class: "lbl" }, n.label), n.state && n.state !== "green" ? h("span", { class: "dot " + n.state, title: "This feed has trouble in Miniflux" }) : null, n.unread ? h("span", { class: "n" }, n.unread) : null), mv);
   });
-  return h("aside", { class: "side", "aria-label": "Folders and feeds" },
+  return h("aside", { class: "side", "aria-label": "Folders and feeds", data: { reorder: String(S.reorder) } },
+    h("div", { class: "sidehead" }, h("span", { class: "grow" }, S.reorder ? "Reordering" : "Folders"),
+      h("button", { class: "ibtn", "data-act": "addfeed", title: "Add a feed from a website (a)", "aria-label": "Add a feed", onclick: () => openAddFeed() }, icon("plus", 18)),
+      h("button", { class: "ibtn" + (S.reorder ? " on" : ""), "data-act": "reorder", title: S.reorder ? "Finish reordering" : "Reorder folders and feeds", "aria-label": S.reorder ? "Finish reordering" : "Reorder folders and feeds", "aria-pressed": String(S.reorder), onclick: toggleReorder }, icon("swap", 17))),
     h("div", { class: "trow" }, h("span", { class: "chev" }), h("button", { class: "tbtn", "aria-current": S.tab === "feed" && S.scope === "all" ? "true" : null, onclick: () => { S.scope = "all"; S.tab = "feed"; lsSet("pravaha.tab", "feed"); S.keep = new Set(); loadView(); } }, icon("list", 16), h("span", { class: "lbl" }, "All articles"), S.unread ? h("span", { class: "n" }, S.unread) : null)),
     rows);
 }
+const reloadGroups = debounce(() => { if (isFeedTab()) loadView(); }, 500);
+async function moveNode(id, dir) { const r = await send({ type: "moveNode", id, dir }); if (r && r.tree) { S.tree = r.tree; renderChrome(); if (r.moved) reloadGroups(); } }
+function toggleReorder() { S.reorder = !S.reorder; renderChrome(); if (S.reorder) toast("Reorder mode. Use the arrows beside a folder or feed, then press the button again to finish.", { kind: "info" }); }
+function toggleBionic() { setPref({ anchor: !U.anchor }); renderChrome(); toast(U.anchor ? "Bionic reading is on." : "Bionic reading is off.", { kind: "info" }); }
+// A redraw must not take the cursor out of the search box while someone is typing in it.
+function keepSearchFocus(fn) {
+  const a = document.activeElement; const keep = a && a.matches && a.matches(".search input") ? a.selectionStart : null; fn();
+  if (keep !== null) { const i = $app.querySelector(".search input"); if (i) { i.focus(); try { i.setSelectionRange(keep, keep); } catch { /* ignore */ } } }
+}
 function renderChrome() {
   const body = $app.querySelector(".body"); if (!body) return render();
-  $app.querySelector(".top")?.replaceWith(topBar()); const side = body.querySelector(".side"); if (side) side.replaceWith(sideBar());
-  body.dataset.side = U.side ? "on" : "off";
+  keepSearchFocus(() => { $app.querySelector(".top")?.replaceWith(topBar()); const side = body.querySelector(".side"); if (side) side.replaceWith(sideBar()); body.dataset.side = U.side ? "on" : "off"; });
 }
 function range(label, key, lo, hi, step, fmt = (v) => v) {
   const out = h("span", {}, fmt(U[key]));
@@ -346,15 +504,15 @@ function range(label, key, lo, hi, step, fmt = (v) => v) {
 function renderPop() {
   $app.querySelector(".pop")?.remove(); if (S.pop !== "aa") return;
   $app.append(h("div", { class: "pop", role: "dialog", "aria-label": "Reading type", onclick: (e) => e.stopPropagation() },
-    h("div", { class: "seg" }, [["newsreader", "Newsreader"], ["literata", "Literata"]].map(([id, l]) => h("button", { "aria-pressed": String(U.readFont === id), style: { fontFamily: `var(--serif-${id})`, flex: 1, justifyContent: "center" }, onclick: () => { setPref({ readFont: id }); renderPop(); } }, l))),
+    h("select", { "aria-label": "Reading font", onchange: (e) => { setPref({ readFont: e.target.value }); renderPop(); } }, READ_FONTS.map(([id, l]) => h("option", { value: id, selected: U.readFont === id, style: { fontFamily: `var(--serif-${id})` } }, l))),
     range("Size", "readSize", 15, 26, 1, (v) => v + "px"), range("Line gap", "readLine", 1.3, 2, 0.05, (v) => Number(v).toFixed(2)), range("Width", "readWidth", 46, 90, 2, (v) => v + "ch"),
-    h("label", { class: "check" }, h("input", { type: "checkbox", checked: U.anchor, onchange: (e) => { setPref({ anchor: e.target.checked }); renderPop(); } }), "Anchor bolding"),
+    h("label", { class: "check" }, h("input", { type: "checkbox", checked: U.anchor, onchange: (e) => { setPref({ anchor: e.target.checked }); renderPop(); } }), "Bionic reading (Shift+B)"),
     range("Strength", "anchorLevel", 1, 5, 1, (v) => ["", "Lightest", "Light", "Medium", "Strong", "Strongest"][v]),
     h("p", { class: "prose", "data-sample": "The quick brown fox reads the morning news, one calm paragraph at a time.", style: { margin: 0, fontSize: "calc(var(--read-size) * .9)" } }, "The quick brown fox reads the morning news, one calm paragraph at a time.")));
   anchorSamples();
 }
 document.addEventListener("click", (e) => { if (S.pop && !e.target.closest(".pop") && !e.target.closest(".aa")) { S.pop = null; renderPop(); renderChrome(); } });
-const SHORTCUTS = [["j / k", "Next or previous article (opens it if a card is open)"], ["o or Enter", "Read here as a card"], ["b", "Open in a background tab, counted as interest"], ["w", "Fetch the full article (the coffee button)"], ["s", "Save or unsave"], ["x", "Dismiss"], ["m", "Mark read or unread"], ["Shift+A", "Mark the section read and fold it"], ["c", "Fold or unfold the section"], ["Shift+C", "Fold or unfold every section"], ["u", "Switch between Unread and All"], ["r", "Sync now"], ["/", "Search"], ["Esc", "Close the card or this panel"], ["?", "Show this list"]];
+const SHORTCUTS = [["j / k", "Next or previous article (opens it if a card is open)"], ["o or Enter", "Read here as a card"], ["b", "Open in a background tab, counted as interest"], ["w", "Fetch the full article (the coffee button)"], ["s", "Save or unsave"], ["x", "Dismiss"], ["m", "Mark read or unread"], ["Shift+A", "Mark the section read and fold it (works without a selection)"], ["Shift+M", "Mark everything in this view read"], ["Shift+B", "Bionic reading on or off"], ["a", "Add a feed from a website"], ["c", "Fold or unfold the section"], ["Shift+C", "Fold or unfold every section"], ["u", "Switch between Unread and All"], ["r", "Sync now"], ["/", "Search"], ["Esc", "Close the card or this panel"], ["?", "Show this list"]];
 function renderOverlay() {
   $app.querySelector(".overlay")?.remove(); if (!S.help) return;
   $app.append(h("div", { class: "overlay", onclick: () => { S.help = false; renderOverlay(); } }, h("div", { class: "dialog", role: "dialog", "aria-label": "Keyboard shortcuts", onclick: (e) => e.stopPropagation() }, h("h2", {}, "Keyboard shortcuts"), h("div", { class: "keys" }, SHORTCUTS.map(([k, d]) => h("div", {}, h("span", {}, d), h("kbd", {}, k)))), h("p", { class: "note", style: { marginTop: "12px" } }, "Shortcuts pause while you type in a box."))));
@@ -364,7 +522,7 @@ function renderOverlay() {
 function render() {
   const view = isFeedTab() ? feedMain() : S.tab === "stats" ? statsMain() : S.tab === "sync" ? syncMain() : settingsMain();
   const body = h("div", { class: "body", "data-side": U.side ? "on" : "off" }, sideBar(), h("main", { class: "main" }, view));
-  $app.replaceChildren(topBar(), body); renderPop(); renderOverlay(); afterMain();
+  keepSearchFocus(() => { $app.replaceChildren(topBar(), body); renderPop(); renderOverlay(); afterMain(); });
 }
 function renderMain() { const m = $app.querySelector(".main"); if (!m) return render(); m.replaceChildren(...(isFeedTab() ? feedMain() : S.tab === "stats" ? statsMain() : S.tab === "sync" ? syncMain() : settingsMain())); afterMain(); }
 function afterMain() {
@@ -402,6 +560,7 @@ function syncMain() {
   return [h("div", { class: "page" }, h("h1", {}, "Sync"),
     h("div", { class: "hero" }, h("div", { style: { flex: "1 1 260px" } }, h("h2", {}, st.overall === "green" ? "All in sync" : st.overall === "red" ? "Something needs attention" : st.overall === "amber" ? "Catching up" : "Not set up yet"),
       h("p", {}, `${n ? `${n} change${n === 1 ? "" : "s"} still to sync` : "Nothing left to sync"}${machines.length ? `. Other machines: ${machines.map(m => m.device || "machine").join(", ")}.` : "."}`)),
+      st.activity ? h("p", { class: "note" }, `${st.activity.label}${st.activity.total ? `: ${Math.min(st.activity.done, st.activity.total)} of ${st.activity.total}` : ""}`) : null,
       h("button", { class: "btn primary", onclick: syncNow }, icon("sync", 15), S.busy ? "Syncing" : "Sync now"), h("button", { class: "btn", onclick: async () => { const r = await send({ type: "digest" }); toast(r.sentence); } }, "Write digest now")),
     h("div", { class: "panel" }, lights), h("div", { class: "panel" }, h("h2", {}, "Changes waiting over time"), spark))];
 }
@@ -439,6 +598,7 @@ async function saveDraft() {
 function settingsMain() {
   const d = ensureDraft(); const tab = S.stab;
   const inp = (label, obj, key, type = "text", w = null, ph = "") => h("label", { class: "field" }, label, h("input", { type, value: obj[key] ?? "", placeholder: ph, autocomplete: "off", spellcheck: "false", oninput: (e) => { obj[key] = type === "number" ? Number(e.target.value) : e.target.value; markDirty(); if (w) queueTest(w); } }));
+  const sel = (label, opts, val, fn) => h("label", { class: "field" }, label, h("select", { onchange: (e) => fn(e.target.value) }, opts.map(([v, l]) => h("option", { value: v, selected: v === val }, l))));
   const chk = (label, obj, key, after) => h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!obj[key], onchange: (e) => { obj[key] = e.target.checked; if (after) after(e.target.checked); else markDirty(); } }), label);
   const conn = (w, fields, help) => h("div", { class: "conn" }, h("h3", {}, SVC[w]), ...fields, h("div", { class: "res " + ((S.tests[w] || {}).state || "idle"), "data-test": w }, (S.tests[w] || {}).sentence ? [h("span", { class: "lamp " + (S.tests[w].state === "ok" ? "green" : S.tests[w].state === "bad" ? "red" : "off"), style: { marginTop: "4px" } }), h("span", {}, S.tests[w].sentence)] : h("span", { class: "note" }, help)),
     h("div", {}, h("button", { class: "btn small", onclick: () => runTest(w, true) }, "Test now")));
@@ -453,9 +613,14 @@ function settingsMain() {
       h("div", { class: "field" }, "Relevance colours", h("div", { class: "seg" }, ["ember", "saffron", "moss"].map(p => h("button", { "aria-pressed": String(U.palette === p), onclick: () => { setPref({ palette: p }); renderMain(); } }, p[0].toUpperCase() + p.slice(1))))),
       h("div", { class: "field" }, "Density", h("div", { class: "seg" }, [["compact", "Compact"], ["comfortable", "Comfortable"]].map(([id, l]) => h("button", { "aria-pressed": String((U.density === "compact") === (id === "compact")), onclick: () => { setPref({ density: id }); renderMain(); } }, l))))),
     chk("Show thumbnails (these load from the publisher's site)", U, "thumbs", (v) => { setPref({ thumbs: v }); }), chk("Mark articles read as they scroll past the top", U, "scrollRead", (v) => { setPref({ scrollRead: v }); })),
-    h("div", { class: "panel" }, h("h2", {}, "Reading type"), h("div", { class: "seg", style: { width: "max-content" } }, [["newsreader", "Newsreader"], ["literata", "Literata"]].map(([id, l]) => h("button", { "aria-pressed": String(U.readFont === id), style: { fontFamily: `var(--serif-${id})` }, onclick: () => { setPref({ readFont: id }); renderMain(); } }, l))),
+    h("div", { class: "panel" }, h("h2", {}, "Marking read"),
+      h("div", { class: "grid2" }, sel("Ask before marking read", CONFIRM_MODES, U.confirmRead, (v) => setPref({ confirmRead: v }))),
+      h("p", { class: "note" }, "Sections and mark all is the default: a single article never asks, a whole section or folder does. Scrolling past an article never asks, and a bulk mark can always be undone from its message.")),
+    h("div", { class: "panel" }, h("h2", {}, "Fonts"),
+      h("div", { class: "grid2" }, sel("Reading font", READ_FONTS, U.readFont, (v) => { setPref({ readFont: v }); }), sel("Interface font", UI_FONTS, U.uiFont, (v) => { setPref({ uiFont: v }); }))),
+    h("div", { class: "panel" }, h("h2", {}, "Reading type"),
       range("Size", "readSize", 15, 26, 1, (v) => v + "px"), range("Line gap", "readLine", 1.3, 2, 0.05, (v) => Number(v).toFixed(2)), range("Width", "readWidth", 46, 90, 2, (v) => v + "ch"),
-      chk("Anchor bolding: bold the start of each word (English and other Latin text)", U, "anchor", (v) => { setPref({ anchor: v }); renderMain(); }), range("Anchor strength", "anchorLevel", 1, 5, 1, (v) => ["", "Lightest", "Light", "Medium", "Strong", "Strongest"][v]),
+      chk("Bionic reading: bold the start of each word (English and other Latin text)", U, "anchor", (v) => { setPref({ anchor: v }); renderChrome(); renderMain(); }), range("Bionic strength", "anchorLevel", 1, 5, 1, (v) => ["", "Lightest", "Light", "Medium", "Strong", "Strongest"][v]),
       h("div", { class: "sample prose" }, h("p", { "data-sample": "Reading is a daily discipline. A comfortable measure, a generous line gap and a calm serif let a long article carry you along without effort." }, "Reading is a daily discipline. A comfortable measure, a generous line gap and a calm serif let a long article carry you along without effort."), h("p", { "data-sample": "Changes apply instantly and stay on this machine." }, "Changes apply instantly and stay on this machine.")))];
   else if (tab === "ranking") content = [h("div", { class: "panel" }, h("h2", {}, "Relevance weights"), ...[["tag", "Tag match"], ["echo", "Sites you read"], ["authority", "Feed standing"], ["freshness", "Freshness"]].map(([k, l]) => { const out = h("span", {}, pct(d.weights[k])); return h("label", { class: "range" }, h("span", {}, l), h("input", { type: "range", min: 0, max: 1, step: 0.05, value: d.weights[k], oninput: (e) => { d.weights[k] = Number(e.target.value); out.textContent = pct(d.weights[k]); markDirty(); } }), out); }),
     h("p", { class: "note" }, "Only the proportions matter. They are rescaled to add up to one when saved."), chk("Boost feeds I have not opened this session", d, "novelty"))];
@@ -469,6 +634,59 @@ function settingsMain() {
     needSave ? h("div", { class: "savebar" }, h("button", { class: "btn primary", "data-save": "1", disabled: S.dirty ? null : true, onclick: saveDraft }, "Save and test"), h("button", { class: "btn", "data-gofeed": "1", hidden: !(S.settings && S.settings.miniflux.token), onclick: () => go("feed") }, "Open Newsfeed"), h("span", { class: "note" }, S.dirty ? "You have unsaved changes." : "Nothing to save.")) : null)];
 }
 
+// ---------- add a feed ----------
+// Miniflux's own server looks at the page and lists its feeds; this extension never contacts the site itself.
+function openAddFeed(prefill = "") {
+  if (!S.settings || !S.settings.miniflux.token) return toast("Connect Miniflux in Settings first.", { kind: "warn" });
+  const st = { found: null, pick: null, cats: null, busy: false, folderFromScope: "" };
+  const here = S.scope && S.scope.startsWith("cat:") ? S.scope.slice(4) : ""; st.folderFromScope = here;
+  const input = h("input", { type: "text", placeholder: "https://example.com or the address of a feed", "aria-label": "Website or feed address", value: prefill, autocomplete: "off", spellcheck: "false", onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); find(); } } });
+  const findBtn = h("button", { class: "btn primary", "data-act": "find", onclick: () => find() }, icon("search", 15), "Find feeds");
+  const results = h("div", { class: "results", "aria-live": "polite" }); const subscribeBtn = h("button", { class: "btn primary", "data-act": "subscribe", disabled: true, onclick: () => subscribe() }, icon("rss", 15), "Subscribe");
+  let catSel = null, newCat = null;
+  const close = () => closeDialog();
+  const paint = (message) => {
+    const kids = [];
+    if (message) kids.push(h("div", { class: "res " + (message.bad ? "bad" : "idle") }, h("span", { class: "lamp " + (message.bad ? "red" : "off"), style: { marginTop: "4px" } }), h("span", {}, message.text)));
+    if (st.found && st.found.length) {
+      kids.push(...st.found.map((f, i) => h("label", { class: "feedopt", "data-dim": String(f.subscribed) }, h("input", { type: "radio", name: "feedpick", disabled: f.subscribed ? true : null, checked: st.pick === i, onchange: () => { st.pick = i; subscribeBtn.disabled = false; } }),
+        h("div", {}, h("b", {}, f.title), h("span", {}, `${f.url}${f.type ? " · " + f.type : ""}${f.subscribed ? " · already subscribed" : ""}`)))));
+      const opts = (st.cats || []).map(c => h("option", { value: String(c.id), selected: c.title === st.folderFromScope }, c.title));
+      catSel = h("select", { "aria-label": "Folder", onchange: () => { newCat.hidden = catSel.value !== "new"; if (!newCat.hidden) newCat.focus(); } }, ...opts, h("option", { value: "new" }, "New folder…"));
+      newCat = h("input", { type: "text", placeholder: "New folder name (use / for a sub-folder, like News/World)", "aria-label": "New folder name", hidden: opts.length ? true : null, autocomplete: "off" });
+      if (!opts.length) catSel.value = "new";
+      kids.push(h("label", { class: "field" }, "Add it to this folder", catSel), newCat);
+    }
+    results.replaceChildren(...kids);
+  };
+  async function find() {
+    if (st.busy) return; const url = input.value.trim(); if (!url) { paint({ bad: true, text: "Enter a web address first." }); return; }
+    st.busy = true; findBtn.disabled = true; subscribeBtn.disabled = true; st.pick = null; paint({ text: "Asking Miniflux to look at the page" });
+    const r = await send({ type: "discover", url }); st.busy = false; findBtn.disabled = false;
+    st.found = r.feeds || []; if (st.found.length) { st.cats = await send({ type: "categories" }); const open = st.found.map((f, i) => (f.subscribed ? -1 : i)).filter(i => i >= 0); if (open.length === 1) { st.pick = open[0]; subscribeBtn.disabled = false; } }
+    paint({ bad: !r.ok, text: r.sentence });
+  }
+  async function subscribe() {
+    const f = st.found && st.found[st.pick]; if (!f) return; subscribeBtn.disabled = true; findBtn.disabled = true;
+    const isNew = catSel && catSel.value === "new"; const categoryId = isNew ? 0 : Number(catSel && catSel.value); const newCategory = isNew ? (newCat && newCat.value) || "" : "";
+    paint({ text: "Subscribing. Miniflux is fetching the feed now" }); // read the choices first: painting rebuilds the folder list
+    const r = await send({ type: "subscribe", feedUrl: f.url, categoryId, newCategory });
+    if (r.ok) { close(); toast(r.sentence, { kind: "success", action: { label: "Open", fn: () => { S.tab = "feed"; lsSet("pravaha.tab", "feed"); S.scope = "feed:" + r.feedId; S.keep = new Set(); loadView(); } } }); S.tree = (await send({ type: "tree" })).tree; if (isFeedTab()) loadView(); }
+    else { findBtn.disabled = false; subscribeBtn.disabled = false; paint({ bad: true, text: r.sentence }); }
+  }
+  S.dialog = "add"; S.dialogCancel = close;
+  dialogHost().replaceChildren(h("div", { class: "overlay", onclick: close }, h("div", { class: "dialog narrow", role: "dialog", "aria-label": "Add a feed", onclick: (e) => e.stopPropagation() },
+    h("h2", {}, "Add a feed"), h("p", {}, "Paste a website or a feed address. Miniflux looks for the feeds on that page and you pick which to follow."),
+    h("div", { class: "urlrow" }, input, findBtn), results, h("div", { class: "dfoot" }, h("button", { class: "btn", "data-act": "cancel", onclick: close }, "Close"), subscribeBtn))));
+  input.focus(); if (prefill) find();
+}
+function handleHash() {
+  const m = /^#subscribe=(.+)$/.exec(location.hash || ""); if (!m) return; let u = ""; try { u = decodeURIComponent(m[1]); } catch { return; }
+  try { history.replaceState(null, "", location.pathname + location.search); } catch { /* ignore */ }
+  if (/^https?:\/\//i.test(u)) openAddFeed(u);
+}
+window.addEventListener("hashchange", handleHash);
+
 // ---------- keyboard ----------
 function selectOffset(d, openIt) {
   const els = rowEls(); if (!els.length) return; let i = els.findIndex(e => Number(e.dataset.id) === S.selId); i = i < 0 ? (d > 0 ? 0 : els.length - 1) : Math.min(els.length - 1, Math.max(0, i + d));
@@ -477,9 +695,12 @@ function selectOffset(d, openIt) {
 }
 document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return; const t = e.target; const typing = t && (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable);
-  if (e.key === "Escape") { if (S.help) { S.help = false; renderOverlay(); } else if (S.pop) { S.pop = null; renderPop(); } else if (typing) t.blur(); else if (S.openCard && S.rows.get(S.openCard)) closeCard(S.rows.get(S.openCard)); return; }
+  if (S.dialog) { if (e.key === "Escape" && S.dialogCancel) { S.dialogCancel(); e.preventDefault(); } return; }
+  if (e.key === "Escape") { if (t && t.matches && t.matches(".search input") && t.value) { clearSearch(); return; } if (S.help) { S.help = false; renderOverlay(); } else if (S.pop) { S.pop = null; renderPop(); } else if (typing) t.blur(); else if (S.openCard && S.rows.get(S.openCard)) closeCard(S.rows.get(S.openCard)); return; }
   if (typing) return;
   if (e.key === "?") { S.help = !S.help; renderOverlay(); e.preventDefault(); return; }
+  if (e.key === "B") { toggleBionic(); e.preventDefault(); return; }
+  if (e.key === "a" && S.settings && S.settings.miniflux.token) { openAddFeed(); e.preventDefault(); return; }
   if (!isFeedTab() || !S.data) return;
   if (e.key === "/") { $app.querySelector(".search input")?.focus(); e.preventDefault(); return; }
   const r = S.rows.get(S.selId); const cardOpen = !!S.openCard;
@@ -491,7 +712,8 @@ document.addEventListener("keydown", (e) => {
       case "x": if (r) { const els = rowEls(); const i = els.findIndex(el => Number(el.dataset.id) === r.id); const next = els[i + 1] || els[i - 1]; dismissRow(r); if (next) selectRow(Number(next.dataset.id)); } return true;
       case "c": { const g = r && groupOf(r.id); if (g) toggleGroup(g); return true; }
       case "C": setAllGroups(!S.data.groups.every(g => isCollapsed(g.key))); renderMain(); return true;
-      case "A": { const g = r && groupOf(r.id); if (g) markSectionRead(g); return true; }
+      case "A": { const g = currentGroup(); if (g) markSectionRead(g); else toast("Nothing unread to mark in a section.", { kind: "info" }); return true; }
+      case "M": markAllRead(); return true;
       case "u": S.mode = S.mode === "unread" ? "all" : "unread"; S.keep = new Set(); loadView(); return true;
       case "r": syncNow(); return true; default: return false;
     }

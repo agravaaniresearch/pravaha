@@ -11,8 +11,14 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Reads in place.** Opening an article shows it as a card inside the list, in Newsreader or Literata. Press `w` (the coffee cup) to ask Miniflux for the complete article. Press `b` to open it in a background tab. Both are logged, and a background open counts more than a card read.
 - **Stays organised.** Feeds are collapsible sections with their Miniflux icon and an unread count. Marking a section read folds it away. Articles can be marked read as they scroll past the top. The tabs are Newsfeed, Saved, Stats, Sync and Settings.
 - **Uses what Miniflux offers.** Thumbnails, reading time, word count, comment links, tags, audio and video enclosures and the full-article flag show as small chips.
-- **Offers anchor bolding** (off by default): the first part of each word is bolded to give the eye a landing point. A strength control runs from lightest to strongest. The word rules are Bionify's, vendored unchanged in `extension/vendor/bionify.mjs` (see the licence section), and applied to the article as DOM nodes rather than HTML. The idea was prompted by the Open|Bionic project. It skips headings and code and works on Latin script only. Independent evidence that it speeds reading is weak, so treat it as a preference.
-- **Has an OLED black theme** besides light and dark, and four reading controls: type, size, line gap and width.
+- **Offers Bionic reading** (off by default; a button in the top bar and on every card, or `Shift+B`): the first part of each word is bolded to give the eye a landing point. A strength control runs from lightest to strongest. The word rules are Bionify's, vendored unchanged in `extension/vendor/bionify.mjs` (see the licence section), and applied to the article as DOM nodes rather than HTML. The idea was prompted by the Open|Bionic project. It skips headings and code and works on Latin script only. Independent evidence that it speeds reading is weak, so treat it as a preference.
+- **Searches everything it has seen.** Loose, typo-tolerant full-text search with `#tag`, `feed:name`, `"exact phrase"`, `-word`, `in:read|unread|saved` and `since:30d`. A compact index keeps articles you read months ago findable after their text has left the reading cache, and a button asks Miniflux itself for older ones.
+- **Marks read reliably.** `Shift+A` marks the section read (with nothing selected it acts on the first section on screen), `Shift+M` marks everything in the current view. The reader works by section, folder or all, not by the rows on screen, sends in chunks, then asks Miniflux which articles are still unread and sends those again. The message says what Miniflux confirmed and has Undo.
+- **Shows when it is talking to Miniflux.** A bar under the top edge, a pill with "Sending changes to Miniflux, 120 of 400", a small spinner on each article still on its way, a progress line under each section, then "Synced with Miniflux".
+- **Asks before marking a whole section or folder** (settings: never, sections and mark all, always).
+- **Reorders folders and feeds** with up and down arrows; the article list follows the sidebar.
+- **Adds feeds from a website.** Press `a`, paste an address, Miniflux finds the feeds on it, pick one and a folder (or make a new one). Right-click any page or link, then "Find feeds here with Pravaha", to start from there.
+- **Has an OLED black theme** besides light and dark, eight reading fonts and four interface fonts (all bundled), and reading controls for size, line gap and width.
 - **Shows relevance as colour.** There are no Good, Great or Best tiers. Each row has a bar and a chip that darken as the score rises. Three palettes are included: ember, saffron and moss.
 - **Learns from what you do.** Opening in a tab, reading a card, reading for more than 15 seconds, saving and dismissing all move a feed's standing. They fade with a 14 day half life. Opens and saves also pull your interest profile toward the article.
 - **Trains like NewsBlur.** Open an article's details and choose More or Less for the feed, the author or a keyword.
@@ -29,11 +35,20 @@ All screenshots show synthetic data: invented feeds, invented articles and fake 
 | | |
 |---|---|
 | ![Newsfeed in OLED black](docs/screenshots/01-newsfeed-oled.png)<br>**Newsfeed, OLED black.** Folders and feeds on the left, collapsible feed sections, a relevance bar and score on every row. | ![A collapsed feed](docs/screenshots/02-collapsed-feed.png)<br>**Collapsed feed.** A section folds to one line. Marking a section read folds it too. |
-| ![Article card in dark theme](docs/screenshots/03-card-dark.png)<br>**Reading in place.** Opening a title shows a card with the article, a background-open button (`b`) and the full-article button (`w`). | ![Anchor bolding in the light theme](docs/screenshots/04-card-anchor-bolding-light.png)<br>**Anchor bolding** in Literata on the light theme. Optional and off by default. |
-| ![Reading controls](docs/screenshots/05-reading-controls.png)<br>**Reading controls.** Type, size, line gap, width, anchor bolding and a live preview. | ![Stats](docs/screenshots/06-stats.png)<br>**Stats.** What you read, opened, saved and dismissed over 30 days. |
+| ![Article card in dark theme](docs/screenshots/03-card-dark.png)<br>**Reading in place.** Opening a title shows a card with the article, a background-open button (`b`) and the full-article button (`w`). | ![Bionic reading in the light theme](docs/screenshots/04-card-anchor-bolding-light.png)<br>**Bionic reading** in Literata on the light theme. Optional and off by default. |
+| ![Reading controls](docs/screenshots/05-reading-controls.png)<br>**Reading controls.** Type, size, line gap, width, Bionic reading and a live preview. | ![Stats](docs/screenshots/06-stats.png)<br>**Stats.** What you read, opened, saved and dismissed over 30 days. |
 | ![Sync status](docs/screenshots/07-sync-status.png)<br>**Sync.** Plain-words status lights for every connection and machine. | ![Settings with inline test](docs/screenshots/08-settings-inline-test.png)<br>**Settings.** The key is tested inline as soon as it is typed. |
 
 ![Narrow window](docs/screenshots/09-narrow-window.png)
+
+New in 0.3.0:
+
+| | |
+|---|---|
+| ![Search](docs/screenshots/10-search.png)<br>**Search.** Fuzzy, with highlights, `#tag` and `feed:` filters, and a button to search Miniflux for older articles. | ![Confirm mark all](docs/screenshots/11-confirm-mark-all.png)<br>**Confirm mark read.** Sections and mark all ask first by default. |
+| ![Syncing with Miniflux](docs/screenshots/12-syncing-with-miniflux.png)<br>**Syncing.** The top-right pill and a bar on each section show changes still going to Miniflux. | ![Toast with undo](docs/screenshots/13-toast-with-undo.png)<br>**Toasts.** Every bulk action reports whether Miniflux confirmed it, with Undo. |
+| ![Reorder folders](docs/screenshots/14-reorder-folders.png)<br>**Reorder.** Move folders and feeds up and down. | ![Add a feed](docs/screenshots/15-add-feed.png)<br>**Add a feed.** Paste a site, pick a discovered feed and a folder. |
+| ![Bionic button](docs/screenshots/16-bionic-button-and-fonts.png)<br>**Bionic button** in the top bar and on the card. | ![Fonts and confirm settings](docs/screenshots/17-settings-fonts-and-confirm.png)<br>**Fonts and Marking read** settings. |
 
 ## Example run on synthetic data
 
@@ -90,14 +105,45 @@ Reading it: the shipbuilding and radiotherapy stories lead because the invented 
 | `s` | Save (star in Miniflux, and to Raindrop if enabled) |
 | `m` | Toggle read |
 | `x` | Dismiss (lowers the feed's standing a little; Undo dismissed is in the toolbar) |
+| `Shift+A` | Mark the section read and fold it (asks first by default; works with nothing selected) |
+| `Shift+M` | Mark everything in the current view read (asks first by default) |
+| `Shift+B` | Bionic reading on or off |
+| `a` | Add a feed from a website |
+| `c` | Fold or unfold the section |
 | `Shift+C` | Collapse or expand every feed |
-| `/` | Search |
+| `u` | Switch between Unread and All |
+| `r` | Sync now |
+| `/` | Search everything |
 | `Esc` | Close the card |
 
 - **Read on scroll** is a toolbar toggle. It marks an article read only after you have seen it and it leaves through the top of the screen, and it is neutral for ranking.
-- **Mark section read** marks a feed's articles read in Miniflux and folds the section away.
+- **Mark section read** marks every unread article of that feed read in Miniflux, including ones not shown because the list is long, and folds the section away. Undo is on the message that follows.
 - **Themes:** light, dark and OLED black, plus three relevance palettes (ember, saffron, moss).
-- **Reading type:** Newsreader or Literata for articles and IBM Plex Sans for the interface, all bundled, with size, line gap and width controls and optional anchor bolding.
+- **Reading type:** Newsreader, Literata, Source Serif, Lora, Crimson Pro, Merriweather, Atkinson Hyperlegible or the system serif for articles; IBM Plex Sans, Source Sans, Atkinson Hyperlegible or the system font for the interface. All are bundled, so nothing loads from the web. Size, line gap, width and Bionic strength are in the Aa menu and in Settings.
+
+### Searching
+
+Type in the box at the top (or press `/`). Words are matched loosely: a misspelling, a different ending or half a word still finds the article, and every word has to match somewhere (title, tags, feed name, excerpt or the keywords taken from the full text). Results are highlighted. Pick Everything, Unread, Read or Saved to narrow them.
+
+| You type | It finds |
+|---|---|
+| `frigte shipyrd` | Articles with words close to both (typos allowed) |
+| `#navy` | Articles tagged navy |
+| `feed:naval` | Articles in a feed whose name starts with naval |
+| `"lemon cake"` | The two words together |
+| `lemon -cake` | Lemon, but not cake |
+| `in:read frigate` | Only articles already read (`in:unread`, `in:saved`, `in:all`) |
+| `deficit since:30d` | Articles from the last 30 days |
+
+The local index covers every article Pravaha has seen in the last 400 days, including ones whose text is gone from the reading cache; those show an Archive chip, and opening one fetches it from Miniflux again. If nothing local matches, **Search Miniflux for older** asks your Miniflux server and adds what it finds to the index.
+
+### Adding a feed
+
+Press `a` or the plus in the sidebar. Paste a website or feed address and press Find feeds. Miniflux's own server looks at the page and lists the feeds it found; ones you already follow are greyed. Pick one, choose a folder (the current folder is preselected) or "New folder" (use `/` for a sub-folder, like `News/World`), then Subscribe. The feed and its first articles appear straight away. From any web page, right-click and choose "Find feeds here with Pravaha" to open the same dialog with that address filled in.
+
+### Reordering
+
+Press the arrows button in the sidebar header. Each folder and feed gets up and down arrows; folders move among folders and feeds among feeds of the same parent. The article list follows the sidebar. The order is kept on this machine and does not change anything in Miniflux.
 
 ## How ranking works
 
@@ -125,7 +171,7 @@ Miniflux (feeds, entries, read state, stars, icons, full-article fetch)
                            Raindrop (optional: tag vocabulary, one-way saving)
 ```
 
-- `extension/src/engine.js` holds the state and the rules; `eventlog.js` merges events by set union; `scoring.js` scores; `miniflux.js`, `webdav.js` and `raindrop.js` are thin clients; `handlers.js` is the message layer between the reader and the engine; `safehtml.js` sanitises article HTML; `anchor.js` applies anchor bolding.
+- `extension/src/engine.js` holds the state and the rules; `eventlog.js` merges events by set union; `scoring.js` scores; `miniflux.js`, `webdav.js` and `raindrop.js` are thin clients; `handlers.js` is the message layer between the reader and the engine; `safehtml.js` sanitises article HTML; `anchor.js` applies Bionic reading; `search.js` does the fuzzy search and its query language.
 - The reader page never uses `innerHTML` for article text. Article HTML is parsed in an inert document and only allowlisted elements are rebuilt as DOM nodes.
 
 ## Privacy and security
@@ -142,12 +188,16 @@ No telemetry. Data goes only to servers you configure. Credentials are stored un
 | Full article button does nothing useful | Miniflux could not fetch that page (paywall or blocking). The excerpt stays. |
 | Two machines rank slightly differently | Expected until both hold the same history and Raindrop data. |
 | A feed shows a red dot | Miniflux reports parsing errors for it; it is excluded from ranking. |
+| "Marked N read" but some came back unread | The message says how many Miniflux did not accept. They are sent again on the next refresh, up to three times. If they keep returning, check Miniflux's own state for those entries. |
+| The pill says "Needs attention" after marking read | Miniflux could not be reached; the changes wait and send when it answers. The sync page shows how many. |
+| Find feeds says Miniflux said something | The text after "Miniflux said" is Miniflux's own answer, for example that no feed was found on that page. |
+| A search result has an Archive chip | Only the index remembers it; clicking it fetches the article from Miniflux again. |
 
 ## Development
 
 ```
 npm install
-npm test            # 91 tests: engine, event log, sync, services, reader screen under jsdom
+npm test            # 128 tests: engine, event log, sync, services, search, bulk marking, reader screen under jsdom
 npm run lint        # Mozilla's web-ext lint
 node tools/failure-rates.mjs 150 --write
 node tools/example-run.mjs
@@ -162,7 +212,7 @@ See [DEPLOY.md](DEPLOY.md). The short version: download `pravaha.xpi` from the l
 
 ```
 npm install
-npm test                       # 91 tests
+npm test                       # 128 tests
 node tools/failure-rates.mjs   # random failure injection, see docs/FAILURE_RATES.md
 npm run lint                   # Mozilla's web-ext lint
 ```
@@ -172,6 +222,9 @@ The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. 
 ## What has not been verified
 
 - **Not run in a real Firefox.** The build has no Firefox binary. The code passes Mozilla's linter and the reader screen is tested under jsdom, but layout, fonts, scrolling and the browser APIs have not been exercised in a live browser. Read on scroll depends on Firefox's IntersectionObserver behaving as in the test.
+- **New Miniflux calls in 0.3.0 are untested against a real server.** `POST /discover`, `POST /feeds`, `POST /categories`, the `search` filter on `/entries`, and the chunked `PUT /entries` with a read-back check follow the documented API and are tested against fakes only. How Miniflux words its errors, and how long a new feed takes to fetch its first articles, are guesses from the documentation. If one misbehaves, the message shown is Miniflux's own.
+- **The right-click menu is untested in a real Firefox.** It uses the `menus` API and a `#subscribe=` address passed to the reader tab; the logic is tested, the menu itself has not been seen.
+- **The "some remain unread" fix is tested against a fake that drops ids.** The cause in your Miniflux is inferred from how the reader worked, not observed. The check afterwards is what makes the outcome visible either way.
 - **Two Miniflux calls are untested against a real server.** Full-article fetch (`/entries/{id}/fetch-content`) and feed icons (`/feeds/{id}/icon`) follow the documented API and are tested against fakes only.
 - **Not run against real servers.** The Miniflux, Fastmail WebDAV and Raindrop calls follow their documented APIs and are tested against fakes only. The Miniflux `changed_after` filter is the least certain of them.
 - **Two machines can score slightly differently** until both hold the same Raindrop data, history snapshots and events. The order of articles is usually the same. Small differences in the number are expected.
@@ -180,7 +233,7 @@ The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. 
 
 ## Shortcuts
 
-`j` and `k` move. `o` or Enter opens the card. `b` opens a background tab. `w` fetches the full article. `s` saves. `m` toggles read. `x` dismisses. `Shift+C` collapses or expands every feed. Esc closes the card.
+`j` and `k` move. `o` or Enter opens the card. `b` opens a background tab. `w` fetches the full article. `s` saves. `m` toggles read. `x` dismisses. `c` folds a section and `Shift+C` folds every one. `Shift+A` marks the section read, `Shift+M` marks everything in view read. `Shift+B` toggles Bionic reading. `a` adds a feed. `/` searches. `u` switches Unread and All. `r` syncs. Esc closes the card or a dialog. `?` lists them.
 
 ## Layout
 
@@ -202,4 +255,3 @@ Pravaha includes code from Bionify (GPL-3.0), so it is released under the GNU Ge
 
 Pravaha is a personal reading tool provided as is, with no warranty. It ranks articles by similarity to your own habits. It does not judge whether an article is true, current or clinically sound, and a high score is not an endorsement. Do not use it as the basis for medical, legal or financial decisions. The example above contains only invented data. Keep your API keys private, use a Fastmail app password rather than your main password, and rotate any key that has been shared.
 
-Licensed under Apache 2.0.

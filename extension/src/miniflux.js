@@ -21,7 +21,11 @@ export class Miniflux {
     }
     if (res.status === 401 || res.status === 403) throw new PlainError("Miniflux refused the API key. Create a new key in Miniflux under Settings, then API Keys, and enter it in Settings here.", "auth");
     if (res.status === 204) return null;
-    if (!res.ok) throw new PlainError(`Miniflux answered with an unexpected reply (${res.status}). Try again in a minute.`, "bad-reply");
+    if (!res.ok) {
+      let msg = ""; try { const j = JSON.parse(await res.text()); msg = String((j && j.error_message) || "").replace(/[\u0000-\u001f]/g, " ").slice(0, 200); } catch { /* no body */ }
+      if (msg && res.status < 600) throw new PlainError(`Miniflux said: ${msg}`, "rejected");
+      throw new PlainError(`Miniflux answered with an unexpected reply (${res.status}). Try again in a minute.`, "bad-reply");
+    }
     const text = await res.text();
     return text ? JSON.parse(text) : null;
   }
@@ -38,6 +42,9 @@ export class Miniflux {
   fetchContent(id) { return this.call("GET", `/entries/${id}/fetch-content`); }
   setStatus(ids, status) { return this.call("PUT", "/entries", { entry_ids: ids, status }); }
   toggleBookmark(id) { return this.call("PUT", `/entries/${id}/bookmark`); }
+  discover(url) { return this.call("POST", "/discover", { url }); }
+  createFeed({ feed_url, category_id }) { return this.call("POST", "/feeds", { feed_url, category_id }); }
+  createCategory(title) { return this.call("POST", "/categories", { title }); }
   markFeedRead(feedId) { return this.call("PUT", `/feeds/${feedId}/mark-all-as-read`); }
   refreshAll() { return this.call("PUT", "/feeds/refresh"); }
   async allUnread(cap = 3000) {

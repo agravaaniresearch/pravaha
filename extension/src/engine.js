@@ -12,12 +12,13 @@ import { buildTagProfiles, suggestTags } from "./tagger.js";
 import { computeStatus } from "./status.js";
 import { buildOutbox, parseResults } from "./enrich.js";
 import { buildDigest, isoWeek } from "./digest.js";
+import { indexEntry, runSearch, parseQuery } from "./search.js";
 
 export const DEFAULT_SETTINGS = {
   device: "", miniflux: { url: "https://reader.miniflux.app", token: "" },
   webdav: { url: "https://myfiles.fastmail.com", user: "", pass: "", root: "pravaha" },
   raindrop: { token: "" }, weights: { ...DEFAULT_WEIGHTS }, pollMinutes: 2, novelty: true,
-  palette: "ember", theme: "light", syncCreds: false, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: true
+  palette: "ember", theme: "light", syncCreds: false, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: true, treeOrder: {}, searchKeepDays: 400
 };
 const DAY = 86400000;
 const UNREAD_CAP = 3000;
@@ -25,26 +26,32 @@ const UNREAD_CAP = 3000;
 const mediaKind = (encs) => { const m = (encs || []).map(x => String(x.mime_type || "")).find(t => /^(audio|video)\//.test(t)); return m ? m.split("/")[0] : null; };
 const ICON_RE = /^image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/i;
 const BODY_CAP = 150;
+const CHUNK = 150;
+const INDEX_CAP = 20000;
+const VERIFY_ROUNDS = 3;
+const RECENT_MS = 10 * 60000;
+const RECENT_TRIES = 3;
 
 export class Engine {
   constructor({ storage, now = () => Date.now(), fetchImpl, platform = {}, onChange = () => {} }) {
     this.storage = storage; this.now = now; this.fetchImpl = fetchImpl; this.platform = platform; this.onChange = onChange;
-    this.sessionFeeds = new Set(); this._vecs = new Map(); this._model = null; this._derived = null;
+    this.sessionFeeds = new Set(); this._settled = new Map(); this.activity = null; this.searchIndex = {}; this._vecs = new Map(); this._model = null; this._derived = null;
   }
 
   // ---------- persistence ----------
   async load() {
-    const s = await this.storage.get(["settings", "cache", "events", "syncState", "pendingOps", "raindropCache", "echoLocal", "enrichment", "net", "others", "pendingHistory", "bodies", "icons"]);
+    const s = await this.storage.get(["settings", "cache", "events", "syncState", "pendingOps", "raindropCache", "echoLocal", "enrichment", "net", "others", "pendingHistory", "bodies", "icons", "searchIndex"]);
     this.settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
     this.settings.miniflux = { ...DEFAULT_SETTINGS.miniflux, ...(this.settings.miniflux || {}) };
     this.settings.webdav = { ...DEFAULT_SETTINGS.webdav, ...(this.settings.webdav || {}) };
     this.settings.raindrop = { ...DEFAULT_SETTINGS.raindrop, ...(this.settings.raindrop || {}) };
     this.settings.weights = { ...DEFAULT_WEIGHTS, ...(this.settings.weights || {}) };
+    if (!this.settings.treeOrder || typeof this.settings.treeOrder !== "object") this.settings.treeOrder = {};
     if (!this.settings.device) this.settings.device = "this-machine";
     this.cache = { items: {}, feeds: [], lastChangeTs: 0, lastDigestAt: 0, lastDigestTerms: [], ...(s.cache || {}) };
     this.pendingOps = (s.pendingOps || []).map(o => ({ ...o, inflight: false })); this.raindropCache = s.raindropCache || null; this.echoLocal = s.echoLocal || null;
     this.enrichment = s.enrichment || {}; this.net = s.net || { miniflux: {}, webdav: {}, raindrop: {} };
-    this.bodies = s.bodies || {}; this.icons = s.icons || {}; this.sessionCards = new Set(); this.others = s.others || {}; this.pendingHistory = s.pendingHistory || [];
+    this.searchIndex = s.searchIndex || {}; this.bodies = s.bodies || {}; this.icons = s.icons || {}; this.sessionCards = new Set(); this.others = s.others || {}; this.pendingHistory = s.pendingHistory || [];
     this.log = new EventLog(this.settings.device, new Clock(this.settings.device, this.now));
     this.log.merge(s.events || []);
     this.syncState = s.syncState || freshSyncState();
@@ -61,14 +68,17 @@ export class Engine {
   }
   async persist(keys) {
     const all = { settings: this.settings, cache: this.cache, events: this.log.list(), syncState: this.syncState, pendingOps: this.pendingOps, raindropCache: this.raindropCache, echoLocal: this.echoLocal, enrichment: this.enrichment, net: this.net, others: this.others, pendingHistory: this.pendingHistory };
-    const out = {}; for (const k of keys || Object.keys(all)) out[k] = all[k];
+    all.searchIndex = this.searchIndex;
+    const out = {}; for (const k of keys || Object.keys(all).filter(x => x !== "searchIndex" || this._idxDirty)) out[k] = all[k];
+    if (out.searchIndex) this._idxDirty = false;
     await this.storage.set(out);
   }
   async saveSettings(patch) {
     const prevDevice = this.settings.device;
     this.settings = { ...this.settings, ...patch,
       miniflux: { ...this.settings.miniflux, ...(patch.miniflux || {}) }, webdav: { ...this.settings.webdav, ...(patch.webdav || {}) },
-      raindrop: { ...this.settings.raindrop, ...(patch.raindrop || {}) }, weights: normaliseWeights({ ...this.settings.weights, ...(patch.weights || {}) }) };
+      raindrop: { ...this.settings.raindrop, ...(patch.raindrop || {}) }, weights: normaliseWeights({ ...this.settings.weights, ...(patch.weights || {}) }),
+      treeOrder: patch.treeOrder !== undefined ? patch.treeOrder : this.settings.treeOrder };
     if (this.settings.device !== prevDevice) {
       const events = this.log.list(); this.log = new EventLog(this.settings.device, new Clock(this.settings.device, this.now)); this.log.merge(events);
       this.syncState = freshSyncState();
@@ -138,21 +148,40 @@ export class Engine {
     if (!this._flushP) this._flushP = this._flush().finally(() => { this._flushP = null; });
     return this._flushP;
   }
+  _act(kind, label, done = 0, total = 0) { this.activity = { kind, label, done, total, at: this.now() }; this.onChange(); }
+  _actEnd(kind) { if (this.activity && (!kind || this.activity.kind === kind)) { this.activity = null; this.onChange(); } }
+  _remaining() { return this.pendingOps.reduce((n, o) => n + (o.ids ? o.ids.length : 1), 0); }
+  // Status changes go to Miniflux in chunks, so one very large request cannot fail as a whole or be cut off.
+  // Each chunk that succeeds is removed from the op, so a retry resends only what did not arrive.
   async _flush() {
+    let done = 0;
     try {
       while (this.pendingOps.length) {
         const o = this.pendingOps[0]; o.inflight = true;
         try {
-          if (o.op === "status") await this.mf.setStatus(o.ids, o.status);
-          else if (o.op === "bookmark") { const e = await this.mf.entry(o.id); if (!!e.starred !== o.desired) await this.mf.toggleBookmark(o.id); }
+          if (o.op === "status") {
+            while (o.ids.length) {
+              this._act("push", "Sending changes to Miniflux", done, done + this._remaining());
+              const part = o.ids.slice(0, CHUNK); await this.mf.setStatus(part, o.status);
+              o.ids = o.ids.slice(part.length); done += part.length; const t = this.now(); for (const id of part) this._settled.set(id, t);
+            }
+          } else if (o.op === "bookmark") {
+            this._act("push", "Sending changes to Miniflux", done, done + this._remaining());
+            const e = await this.mf.entry(o.id); if (!!e.starred !== o.desired) await this.mf.toggleBookmark(o.id); done++; this._settled.set(o.id, this.now());
+          }
         } catch (err) { o.inflight = false; throw err; }
         const i = this.pendingOps.indexOf(o); if (i >= 0) this.pendingOps.splice(i, 1);
       }
       this._netOk("miniflux");
     } catch (e) { this._netErr("miniflux", e); }
+    this._actEnd("push");
+    for (const [id, t] of this._settled) if (this.now() - t > 600000) this._settled.delete(id);
     await this.persist(["pendingOps", "net"]);
   }
   _queue(op) {
+    // Remember what was just marked read here. If Miniflux still lists one as unread on a later refresh, it did not
+    // stick, so it is sent again (a few times at most) instead of reappearing as unread in the reader.
+    if (op.op === "status") { const rc = this.cache.recent || (this.cache.recent = {}); for (const id of op.ids) { if (op.status === "read") rc[id] = { t: this.now(), n: (rc[id] && rc[id].n) || 0 }; else delete rc[id]; } }
     const last = this.pendingOps[this.pendingOps.length - 1];
     if (op.op === "status" && last && last.op === "status" && last.status === op.status && !last.inflight) last.ids = [...new Set([...last.ids, ...op.ids])];
     else this.pendingOps.push(op);
@@ -164,12 +193,22 @@ export class Engine {
     if (!this.mf) return;
     try {
       await this.flushOps();
+      const t0 = this.now(); this._act("pull", "Reading from Miniflux");
       const feeds = await this.mf.feeds();
-      this.cache.feeds = feeds.map(f => ({ id: f.id, title: f.title, category: (f.category && f.category.title) || "Uncategorised", health: feedHealth(f, this.now()), siteUrl: f.site_url || "", iconId: f.icon ? f.icon.icon_id : null, checkedAt: f.checked_at || null }));
+      this.cache.feeds = feeds.map(f => ({ id: f.id, title: f.title, category: (f.category && f.category.title) || "Uncategorised", health: feedHealth(f, this.now()), siteUrl: f.site_url || "", feedUrl: f.feed_url || "", iconId: f.icon ? f.icon.icon_id : null, checkedAt: f.checked_at || null }));
       const un = await this.mf.allUnread(UNREAD_CAP);
       const capped = un.entries.length >= UNREAD_CAP && un.total > un.entries.length;
-      const pend = this._pendingIds(); const serverIds = new Set();
-      for (const e of un.entries) { serverIds.add(e.id); if (pend.has(e.id)) continue; this.cache.items[e.id] = this._norm(e, this.cache.items[e.id]); }
+      // Anything we sent while this fetch was running may be missing from the snapshot, so it counts as pending too.
+      const pend = this._pendingIds(); for (const [id, t] of this._settled) if (t > t0) pend.add(id);
+      const serverIds = new Set();
+      const recent = this.cache.recent || (this.cache.recent = {}); for (const id of Object.keys(recent)) if (this.now() - recent[id].t > RECENT_MS || recent[id].n >= RECENT_TRIES) delete recent[id];
+      const resend = [];
+      for (const e of un.entries) {
+        serverIds.add(e.id); if (pend.has(e.id)) continue; const cur = this.cache.items[e.id];
+        if (cur && cur.status === "read" && recent[e.id]) { recent[e.id].n++; resend.push(e.id); continue; }
+        this.cache.items[e.id] = this._norm(e, cur);
+      }
+      if (resend.length) this._queue({ op: "status", ids: resend, status: "read" });
       if (!capped) for (const it of Object.values(this.cache.items)) if (it.status === "unread" && !serverIds.has(it.id) && !pend.has(it.id)) it.status = "read";
       const starred = await this.mf.entries({ starred: "true", limit: 250, order: "published_at", direction: "desc" });
       const starIds = new Set();
@@ -179,10 +218,12 @@ export class Engine {
         for (const e of await this.mf.changedSince(this.cache.lastChangeTs)) { if (pend.has(e.id)) continue; if (this.cache.items[e.id] || e.status === "unread") this.cache.items[e.id] = this._norm(e, this.cache.items[e.id]); }
       }
       this.cache.lastChangeTs = Math.floor(this.now() / 1000) - 5;
-      this._retain();
+      this._retain(); this._reindex();
+      if (this.pendingOps.length) await this.flushOps();
       this._netOk("miniflux"); this._vecs.clear();
     } catch (e) { this._netErr("miniflux", e); }
-    await this.persist(["cache", "net", "pendingOps"]);
+    this._actEnd("pull");
+    await this.persist(["cache", "net", "pendingOps", "searchIndex"]);
   }
   _retain() {
     const cut = this.now() - this.settings.retentionDays * DAY; const d = this._derive();
@@ -241,14 +282,14 @@ export class Engine {
 
   status() {
     const feeds = this.cache.feeds || [];
-    return computeStatus({
+    return { activity: this.activity, pendingCount: this._remaining(), ...computeStatus({
       now: this.now(), device: this.settings.device, myHead: this.log.headOf(this.settings.device), remoteHeads: this.syncState.remoteHeads, others: this.others,
       miniflux: { configured: !!this.mf, error: this.net.miniflux && this.net.miniflux.error, lastOkAt: this.net.miniflux && this.net.miniflux.lastOkAt },
       webdav: { configured: !!this.dav, error: this.net.webdav && this.net.webdav.error, lastOkAt: this.net.webdav && this.net.webdav.lastOkAt },
       raindrop: { configured: !!this.rd, error: this.net.raindrop && this.net.raindrop.error, lastOkAt: this.net.raindrop && this.net.raindrop.lastOkAt },
       pendingOps: this.pendingOps.reduce((n, o) => n + (o.ids ? o.ids.length : 1), 0), pendingEvents: this.syncer ? this.syncer.pending().length : this.log.own().length, corruptLines: this.syncState.corruptLines,
       feeds: { total: feeds.length, dead: feeds.filter(f => f.health.dead).length, trouble: feeds.filter(f => f.health.state === "amber").length }
-    });
+    }) };
   }
 
   // ---------- views ----------
@@ -258,46 +299,64 @@ export class Engine {
   }
   _feedMeta() { const m = {}; for (const f of this.cache.feeds) m[f.id] = f; return m; }
   tree() {
-    const d = this._derive(); const nodes = new Map(); const out = [];
+    const d = this._derive(); const nodes = new Map();
     const unreadBy = {}; for (const it of Object.values(this.cache.items)) if (it.status === "unread" && !d.dismissed.has(it.id)) unreadBy[it.feedId] = (unreadBy[it.feedId] || 0) + 1;
     const ensure = (path) => {
       const id = "cat:" + path.join("/"); if (nodes.has(id)) return nodes.get(id);
       const parent = path.length > 1 ? ensure(path.slice(0, -1)) : null;
-      const n = { id, type: "folder", label: path[path.length - 1], depth: path.length - 1, parent: parent && parent.id, unread: 0, order: path.join("/").toLowerCase() };
+      const n = { id, type: "folder", label: path[path.length - 1], depth: path.length - 1, parent: parent && parent.id, unread: 0 };
       nodes.set(id, n); return n;
     };
-    const feeds = [...this.cache.feeds].sort((a, b) => a.title.localeCompare(b.title));
-    for (const f of feeds) {
+    for (const f of this.cache.feeds) {
       const path = splitCategory(f.category); const folder = ensure(path);
-      const n = { id: "feed:" + f.id, type: "feed", label: f.title, depth: folder.depth + 1, parent: folder.id, unread: unreadBy[f.id] || 0, state: f.health.state, order: path.join("/").toLowerCase() + "/~" + f.title.toLowerCase() };
+      const n = { id: "feed:" + f.id, type: "feed", label: f.title, depth: folder.depth + 1, parent: folder.id, unread: unreadBy[f.id] || 0, state: f.health.state };
       nodes.set(n.id, n);
       for (let p = folder; p; p = p.parent ? nodes.get(p.parent) : null) p.unread += n.unread;
     }
-    return [...nodes.values()].sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
+    // Siblings follow the order the reader saved, then the alphabet. Folders come before feeds within a parent.
+    const kids = new Map(); for (const n of nodes.values()) { const k = n.parent || "root"; if (!kids.has(k)) kids.set(k, []); kids.get(k).push(n); }
+    const saved = this.settings.treeOrder || {}; const out = [];
+    const walk = (key) => {
+      const list = kids.get(key) || []; const ord = Array.isArray(saved[key]) ? saved[key] : [];
+      const rank = (n) => { const i = ord.indexOf(n.id); return i < 0 ? 1e6 : i; };
+      list.sort((a, b) => (a.type === b.type ? 0 : a.type === "folder" ? -1 : 1) || rank(a) - rank(b) || a.label.toLowerCase().localeCompare(b.label.toLowerCase()));
+      list.forEach((n, i) => { n.first = i === 0 || list[i - 1].type !== n.type; n.last = i === list.length - 1 || list[i + 1].type !== n.type; out.push(n); if (n.type === "folder") walk(n.id); });
+    };
+    walk("root"); return out;
+  }
+  // Move a folder or feed one place up or down among its siblings of the same kind.
+  async moveNode(id, dir) {
+    const t = this.tree(); const n = t.find(x => x.id === id); if (!n) return false;
+    const sib = t.filter(x => (x.parent || "root") === (n.parent || "root") && x.type === n.type).map(x => x.id);
+    const i = sib.indexOf(id), j = i + (dir === "up" ? -1 : 1); if (i < 0 || j < 0 || j >= sib.length) return false;
+    [sib[i], sib[j]] = [sib[j], sib[i]];
+    const key = n.parent || "root"; const all = t.filter(x => (x.parent || "root") === key).map(x => x.id);
+    const merged = [...sib, ...all.filter(x => !sib.includes(x))];
+    await this.saveSettings({ treeOrder: { ...(this.settings.treeOrder || {}), [key]: merged } }); return true;
   }
   unreadCount() { const d = this._derive(); return Object.values(this.cache.items).filter(i => i.status === "unread" && !d.dismissed.has(i.id)).length; }
+  _rowOf(it, ctx, dead, pend) {
+    const s = this.scoreOne(it, ctx);
+    return { id: it.id, feedId: it.feedId, feedTitle: it.feedTitle, title: it.title, summary: it.summary, url: it.url, publishedAt: it.publishedAt, read: it.status === "read", saved: it.starred,
+      score: s.score, why: whyRanked(s.breakdown), breakdown: s.breakdown, flag: s.flag, author: it.author, readingTime: it.readingTime, dead: dead.has(it.feedId), domain: it.domain, tags: it.tags || [], words: it.words || 0, thumb: it.thumb || null, media: it.media || null, comments: it.comments || null, newish: it.publishedAt > this.now() - 3 * 3600000, pending: !!(pend && pend.has(it.id)) };
+  }
   getView({ scope = "all", mode = "unread", ranked = false, q = "", keep = [] } = {}) {
     const d = this._derive(); const ctx = this._scoreCtx(); const keepSet = new Set(keep); const meta = this._feedMeta();
-    const ql = q.trim().toLowerCase(); const dead = new Set(this.cache.feeds.filter(f => f.health.dead).map(f => f.id));
-    const matchScope = (it) => scope === "all" || scope === "saved" ? true : scope.startsWith("feed:") ? "feed:" + it.feedId === scope :
-      (() => { const p = splitCategory((meta[it.feedId] && meta[it.feedId].category) || it.category).join("/"); const want = scope.slice(4); return p === want || p.startsWith(want + "/"); })();
-    let items = Object.values(this.cache.items).filter(it => !d.dismissed.has(it.id) && matchScope(it));
+    const ql = q.trim().toLowerCase(); const dead = new Set(this.cache.feeds.filter(f => f.health.dead).map(f => f.id)); const pend = this._pendingIds();
+    let items = Object.values(this.cache.items).filter(it => !d.dismissed.has(it.id) && this._inScope(scope, it, meta));
     if (scope === "saved") items = items.filter(it => it.starred);
     else if (mode === "unread") items = items.filter(it => it.status === "unread" || keepSet.has(it.id));
     if (ql) items = items.filter(it => `${it.title} ${it.summary} ${it.feedTitle}`.toLowerCase().includes(ql));
-    const rows = items.map(it => {
-      const s = this.scoreOne(it, ctx);
-      return { id: it.id, feedId: it.feedId, feedTitle: it.feedTitle, title: it.title, summary: it.summary, url: it.url, publishedAt: it.publishedAt, read: it.status === "read", saved: it.starred,
-        score: s.score, why: whyRanked(s.breakdown), breakdown: s.breakdown, flag: s.flag, author: it.author, readingTime: it.readingTime, dead: dead.has(it.feedId), domain: it.domain, tags: it.tags || [], words: it.words || 0, thumb: it.thumb || null, media: it.media || null, comments: it.comments || null, newish: it.publishedAt > this.now() - 3 * 3600000 };
-    });
+    const rows = items.map(it => this._rowOf(it, ctx, dead, pend));
     let groups;
     if (ranked) {
       const r = rows.filter(x => !x.dead).sort((a, b) => b.score - a.score || b.publishedAt - a.publishedAt);
       groups = [{ key: "ranked", title: "Ranked for you", unread: r.filter(x => !x.read).length, rows: r }];
     } else {
+      const pos = new Map(); this.tree().forEach((n, i) => pos.set(n.id, i));
       const by = new Map(); for (const r of rows) { if (!by.has(r.feedId)) by.set(r.feedId, []); by.get(r.feedId).push(r); }
       groups = [...by.entries()].map(([id, rs]) => ({ key: "feed:" + id, feedId: Number(id), title: rs[0].feedTitle, unread: rs.filter(x => !x.read).length, rows: rs.sort((a, b) => b.publishedAt - a.publishedAt) }))
-        .sort((a, b) => a.title.localeCompare(b.title));
+        .sort((a, b) => ((pos.has(a.key) ? pos.get(a.key) : 1e9) - (pos.has(b.key) ? pos.get(b.key) : 1e9)) || a.title.localeCompare(b.title));
     }
     return { groups, total: rows.length, unreadTotal: Object.values(this.cache.items).filter(i => i.status === "unread" && !d.dismissed.has(i.id)).length, dismissedCount: d.dismissed.size, iconCount: Object.keys(this.icons).length };
   }
@@ -309,13 +368,50 @@ export class Engine {
     this.log.append(type, { entry: it.id, feed: it.feedId, payload: { terms: v.stems, score: this.scoreOne(it).score, ...extra } });
     this._derived = null; this._model = null;
   }
-  async markRead(ids, { explicit = false } = {}) {
-    for (const id of ids) { const it = this.cache.items[id]; if (!it || it.status === "read") continue; it.status = "read"; if (explicit && ids.length === 1) this._evt(it, "read_no_open"); }
+  // Marks articles read and, for a bulk action, checks with Miniflux that every one of them really arrived.
+  // Returns plain counts so the reader can say what happened.
+  async markRead(ids, { explicit = false, verify } = {}) {
+    ids = [...new Set(ids)]; const flipped = [];
+    for (const id of ids) { const it = this.cache.items[id]; if (!it || it.status === "read") continue; it.status = "read"; flipped.push(id); if (explicit && ids.length === 1) this._evt(it, "read_no_open"); }
+    const changed = flipped.length;
+    if (!ids.length) return { count: 0, changed: 0, ids: [], verified: true, retried: 0, failed: 0, pending: this._remaining() };
     this._queue({ op: "status", ids: [...ids], status: "read" }); await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
+    const res = { count: ids.length, changed, ids: flipped, verified: false, retried: 0, failed: 0, pending: this._remaining() };
+    if (verify === undefined ? ids.length >= 25 : verify) Object.assign(res, await this._verifyRead(ids));
+    return res;
+  }
+  // Fetch what Miniflux still lists as unread, and resend any of ours that did not stick. A few rounds at most.
+  async _verifyRead(ids) {
+    const mine = new Set(ids); let retried = 0; let still = [];
+    if (!this.mf) return { verified: false, retried, failed: 0, pending: this._remaining() };
+    try {
+      for (let round = 0; round <= VERIFY_ROUNDS; round++) {
+        if (this._remaining()) { await this.flushOps(); if (this._remaining()) break; }
+        this._act("verify", "Checking with Miniflux", round, VERIFY_ROUNDS + 1);
+        const un = await this.mf.allUnread(UNREAD_CAP); still = un.entries.map(e => e.id).filter(id => mine.has(id) && this.cache.items[id] && this.cache.items[id].status === "read");
+        if (!still.length) { this._actEnd("verify"); return { verified: true, retried, failed: 0, serverUnread: un.total, pending: 0 }; }
+        if (round === VERIFY_ROUNDS) break;
+        retried += still.length; this._queue({ op: "status", ids: still, status: "read" }); await this.persist(["pendingOps"]); await this.flushOps();
+      }
+    } catch (e) { this._netErr("miniflux", e); }
+    this._actEnd("verify");
+    return { verified: false, retried, failed: still.length || this._remaining(), pending: this._remaining() };
+  }
+  _scopeIds(scope) {
+    const d = this._derive(); const meta = this._feedMeta();
+    return Object.values(this.cache.items).filter(it => it.status === "unread" && !d.dismissed.has(it.id) && this._inScope(scope, it, meta)).map(it => it.id);
+  }
+  // Mark everything unread in a scope ("all", a folder, or a feed), whatever the reader is currently showing.
+  markScope(scope) { return this.markRead(this._scopeIds(scope), { verify: true }); }
+  _inScope(scope, it, meta) {
+    if (scope === "all" || scope === "saved") return true;
+    if (scope.startsWith("feed:")) return "feed:" + it.feedId === scope;
+    const p = splitCategory((meta[it.feedId] && meta[it.feedId].category) || it.category).join("/"); const want = scope.slice(4); return p === want || p.startsWith(want + "/");
   }
   async markUnread(ids) {
     for (const id of ids) { const it = this.cache.items[id]; if (it) it.status = "unread"; }
     this._queue({ op: "status", ids: [...ids], status: "unread" }); await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
+    return { count: ids.length, pending: this._remaining() };
   }
   // The reader opened the article as an in-page card. A light positive signal, logged once per session.
   async openCard(id) {
@@ -325,10 +421,101 @@ export class Engine {
     if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
     await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
   }
+  // ---------- local search ----------
+  // The index is a compact record of every article seen: title, feed, tags, a short summary and about fourteen
+  // keywords from the full text. It outlives the reading copy, so an article read months ago can still be found.
+  _reindex() {
+    const keepDays = Number(this.settings.searchKeepDays) || 400; const cut = this.now() - keepDays * DAY; let changed = false;
+    for (const it of Object.values(this.cache.items)) {
+      const cur = this.searchIndex[it.id]; const body = this.bodies[it.id];
+      if (cur && cur.t === it.title && (cur.g || []).join("|") === (it.tags || []).join("|") && (cur.k || !body)) continue;
+      const next = indexEntry(it, body ? body.html : null); if (cur && cur.k && !next.k) next.k = cur.k;
+      this.searchIndex[it.id] = next; changed = true;
+    }
+    const ids = Object.keys(this.searchIndex);
+    for (const id of ids) { const e = this.searchIndex[id]; if (!this.cache.items[id] && e.p && e.p < cut) { delete this.searchIndex[id]; changed = true; } }
+    const left = Object.keys(this.searchIndex);
+    if (left.length > INDEX_CAP) {
+      const drop = left.filter(id => !this.cache.items[id]).sort((a, b) => this.searchIndex[a].p - this.searchIndex[b].p).slice(0, left.length - INDEX_CAP);
+      for (const id of drop) delete this.searchIndex[id]; if (drop.length) changed = true;
+    }
+    if (changed) this._idxDirty = true;
+  }
+  _stateOf(e) { const it = this.cache.items[e.id]; return it ? { read: it.status === "read", saved: !!it.starred } : { read: true, saved: false }; }
+  _pseudo(e) {
+    return { id: e.id, feedId: e.fi, feedTitle: e.f, category: e.c, title: e.t, summary: e.s, url: e.u, publishedAt: e.p, author: null, tags: e.g || [], status: "read", starred: false, readingTime: 0, words: 0, thumb: null, media: null, comments: null, domain: domainOf(e.u || "") };
+  }
+  // Fuzzy search over everything in the index. Returns rows in the same shape as the article list.
+  search(query, { limit = 150 } = {}) {
+    const parsed = parseQuery(query); const found = runSearch(Object.values(this.searchIndex), parsed, { now: this.now(), limit, stateOf: (e) => this._stateOf(e) });
+    const ctx = this._scoreCtx(); const dead = new Set(this.cache.feeds.filter(f => f.health.dead).map(f => f.id)); const pend = this._pendingIds();
+    const terms = [...parsed.terms, ...parsed.phrases.flatMap(p => p.split(/\s+/)), ...parsed.tags];
+    const rows = found.map(({ e }) => { const cached = this.cache.items[e.id]; const row = this._rowOf(cached || this._pseudo(e), ctx, dead, pend); row.indexOnly = !cached; return row; });
+    return { rows, total: rows.length, terms, indexSize: Object.keys(this.searchIndex).length, empty: !(parsed.terms.length + parsed.phrases.length + parsed.tags.length + parsed.feed.length) };
+  }
+  // Ask Miniflux itself for older articles that the local index does not hold. Hits join the index.
+  async searchServer(query) {
+    if (!this.mf) return { ok: false, sentence: "Miniflux is not set up yet." };
+    const q = String(query || "").replace(/(^|\s)(#|feed:|in:|since:)\S*/gi, " ").replace(/\s+/g, " ").trim();
+    if (!q) return { ok: false, sentence: "Type some words to search for on Miniflux." };
+    this._act("search", "Searching Miniflux");
+    try {
+      const r = await this.mf.entries({ search: q, limit: 50, order: "published_at", direction: "desc" }); let added = 0;
+      for (const e of r.entries || []) { const it = this._norm(e, this.cache.items[e.id]); if (!this.searchIndex[e.id]) added++; this.searchIndex[e.id] = indexEntry(it, e.content || ""); }
+      this._idxDirty = true; await this.persist(["searchIndex"]); this._netOk("miniflux");
+      return { ok: true, found: (r.entries || []).length, added, sentence: `Miniflux found ${(r.entries || []).length} article${(r.entries || []).length === 1 ? "" : "s"}${added ? `; ${added} were new to this search.` : "."}` };
+    } catch (e) { this._netErr("miniflux", e); return { ok: false, sentence: e instanceof PlainError ? e.plain : "The search on Miniflux failed for an unexpected reason." }; }
+    finally { this._actEnd("search"); }
+  }
+  // Bring an old article that only the index remembers back into the cache, so the card can show it.
+  async restore(id) {
+    if (this.cache.items[id]) return true; if (!this.mf) return false;
+    try { const e = await this.mf.entry(id); this.cache.items[id] = this._norm(e, undefined); await this.persist(["cache"]); this.onChange(); return true; }
+    catch (err) { this._netErr("miniflux", err); return false; }
+  }
+
+  // ---------- subscribing ----------
+  async categoryList() {
+    if (!this.mf) return [];
+    try { const c = await this.mf.categories(); this._netOk("miniflux"); return (c || []).map(x => ({ id: x.id, title: x.title })).sort((a, b) => a.title.localeCompare(b.title)); }
+    catch (e) { this._netErr("miniflux", e); return []; }
+  }
+  // Miniflux's own server looks at the page; this extension never contacts the site itself.
+  async discover(url) {
+    if (!this.mf) return { ok: false, sentence: "Miniflux is not set up yet.", feeds: [] };
+    let u = String(url || "").trim(); if (!u) return { ok: false, sentence: "Enter a web address first.", feeds: [] };
+    if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+    try { new URL(u); } catch { return { ok: false, sentence: "That does not look like a web address.", feeds: [] }; }
+    this._act("discover", "Looking for feeds");
+    try {
+      const r = await this.mf.discover(u); this._netOk("miniflux");
+      const have = new Set(this.cache.feeds.map(f => String(f.feedUrl || "")));
+      const feeds = (r || []).filter(f => f && /^https?:\/\//i.test(f.url || "")).map(f => ({ url: f.url, title: String(f.title || f.url).slice(0, 160), type: String(f.type || "").slice(0, 12), subscribed: have.has(f.url) }));
+      return { ok: true, url: u, feeds, sentence: feeds.length ? `Found ${feeds.length} feed${feeds.length === 1 ? "" : "s"}.` : "No feed was found on that page." };
+    } catch (e) { return { ok: false, feeds: [], sentence: e instanceof PlainError ? e.plain : "The search for feeds failed for an unexpected reason." }; }
+    finally { this._actEnd("discover"); }
+  }
+  async subscribe({ feedUrl, categoryId, newCategory }) {
+    if (!this.mf) return { ok: false, sentence: "Miniflux is not set up yet." };
+    if (!/^https?:\/\//i.test(String(feedUrl || ""))) return { ok: false, sentence: "That feed address is not valid." };
+    this._act("subscribe", "Subscribing");
+    try {
+      let cid = Number(categoryId) || 0; const title = String(newCategory || "").trim().slice(0, 120);
+      if (title) { const c = await this.mf.createCategory(title); cid = c.id; }
+      if (!cid) { const all = await this.mf.categories(); cid = (all && all[0] && all[0].id) || 1; }
+      const r = await this.mf.createFeed({ feed_url: feedUrl, category_id: cid }); this._netOk("miniflux");
+      await this.refresh();
+      const f = this.cache.feeds.find(x => x.id === r.feed_id);
+      return { ok: true, feedId: r.feed_id, title: f ? f.title : "the feed", sentence: `Subscribed to ${f ? f.title : "the feed"}.` };
+    } catch (e) { this._netErr("miniflux", e); return { ok: false, sentence: e instanceof PlainError ? e.plain : "Subscribing failed for an unexpected reason." }; }
+    finally { this._actEnd("subscribe"); }
+  }
+
   async _saveBodies() {
+    this._reindex();
     const keys = Object.keys(this.bodies);
     if (keys.length > BODY_CAP) for (const k of keys.sort((a, b) => this.bodies[a].at - this.bodies[b].at).slice(0, keys.length - BODY_CAP)) delete this.bodies[k];
-    await this.storage.set({ bodies: this.bodies });
+    await this.storage.set(this._idxDirty ? { bodies: this.bodies, searchIndex: this.searchIndex } : { bodies: this.bodies }); this._idxDirty = false;
   }
   // The article body for the card: what Miniflux holds for the entry, fetched on demand and kept for the last 150 cards.
   async getContent(id) {
