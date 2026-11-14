@@ -22,6 +22,19 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Writes a weekly digest** to the WebDAV folder as Markdown with Dataview front matter, for Obsidian.
 - **Accepts outside scores.** A Grok automation, or anything else, can write `enrich/results.json`. Pravaha blends 20 percent of that score with 80 percent of its own.
 
+## Screenshots
+
+All screenshots show synthetic data: invented feeds, invented articles and fake servers. They are taken by `tools/screenshots/shoot.py`, which runs the real reader screen in Chrome against the test fakes, so they can be regenerated at any time.
+
+| | |
+|---|---|
+| ![Newsfeed in OLED black](docs/screenshots/01-newsfeed-oled.png)<br>**Newsfeed, OLED black.** Folders and feeds on the left, collapsible feed sections, a relevance bar and score on every row. | ![A collapsed feed](docs/screenshots/02-collapsed-feed.png)<br>**Collapsed feed.** A section folds to one line. Marking a section read folds it too. |
+| ![Article card in dark theme](docs/screenshots/03-card-dark.png)<br>**Reading in place.** Opening a title shows a card with the article, a background-open button (`b`) and the full-article button (`w`). | ![Anchor bolding in the light theme](docs/screenshots/04-card-anchor-bolding-light.png)<br>**Anchor bolding** in Literata on the light theme. Optional and off by default. |
+| ![Reading controls](docs/screenshots/05-reading-controls.png)<br>**Reading controls.** Type, size, line gap, width, anchor bolding and a live preview. | ![Stats](docs/screenshots/06-stats.png)<br>**Stats.** What you read, opened, saved and dismissed over 30 days. |
+| ![Sync status](docs/screenshots/07-sync-status.png)<br>**Sync.** Plain-words status lights for every connection and machine. | ![Settings with inline test](docs/screenshots/08-settings-inline-test.png)<br>**Settings.** The key is tested inline as soon as it is typed. |
+
+![Narrow window](docs/screenshots/09-narrow-window.png)
+
 ## Example run on synthetic data
 
 Everything below is invented. The feeds, articles and bookmarks do not exist. The run uses the same fake servers as the test bed. Reproduce it with `node tools/example-run.mjs`.
@@ -59,7 +72,89 @@ Status lights on the desktop:
 
 Reading it: the shipbuilding and radiotherapy stories lead because the invented Raindrop library is full of both. After the laptop trains Harbour Weekly up, the desktop ranks its stories higher without ever having seen the click directly. The pasta story is gone from the desktop because the laptop dismissed it. The desktop never cached the radiotherapy story because the laptop had already opened it before the desktop's first fetch. The Feeds light is red because the invented Old Blog feed is failing, and it is excluded from ranking.
 
-## Install
+## Getting started
+
+1. **Prerequisites.** Firefox on desktop, a Miniflux server (hosted or self-hosted) with an API key from Miniflux, Settings, API Keys, and optionally a Fastmail app password with Files access (for syncing two machines) and a Raindrop test token (for tag suggestions and saving).
+2. **Install.** Download the signed `pravaha-<version>.xpi` from the releases page, open `about:addons`, click the gear icon and choose Install Add-on From File. See [DEPLOY.md](DEPLOY.md) for building and signing it yourself.
+3. **Connect.** Click the Pravaha button. The Settings page opens on Connections. Type the Miniflux address and key; the connection is tested as soon as both boxes are filled and the result appears under the box. Do the same for WebDAV and Raindrop if you use them, then press Save and test. A custom server address makes Firefox ask for permission once.
+4. **Read.** Open the Newsfeed. Feeds are grouped under their Miniflux folders, ranked by relevance within each section.
+
+## Using the reader
+
+| Key | Action |
+|---|---|
+| `j` / `k` | Next and previous article |
+| `o` or Enter | Open the article as a card in the list |
+| `b` | Open the article in a background tab (counts as a full open for ranking) |
+| `w` | Fetch the complete article through Miniflux (the coffee cup) |
+| `s` | Save (star in Miniflux, and to Raindrop if enabled) |
+| `m` | Toggle read |
+| `x` | Dismiss (lowers the feed's standing a little; Undo dismissed is in the toolbar) |
+| `Shift+C` | Collapse or expand every feed |
+| `/` | Search |
+| `Esc` | Close the card |
+
+- **Read on scroll** is a toolbar toggle. It marks an article read only after you have seen it and it leaves through the top of the screen, and it is neutral for ranking.
+- **Mark section read** marks a feed's articles read in Miniflux and folds the section away.
+- **Themes:** light, dark and OLED black, plus three relevance palettes (ember, saffron, moss).
+- **Reading type:** Newsreader or Literata for articles and IBM Plex Sans for the interface, all bundled, with size, line gap and width controls and optional anchor bolding.
+
+## How ranking works
+
+Each unread article gets a score from 0 to 1: 0.40 tag match against your own Raindrop tag vocabulary, 0.30 echo (sites you read, from local history and bookmarks), 0.20 feed standing (learned from your actions) and 0.10 freshness. Training rules from More and Less buttons add or subtract up to 0.2, and feeds you have not opened this session get a small novelty boost. The score is stretched for display and shown as colour and a number, never as tiers.
+
+| Action | Effect on the feed's standing | Pull on your interest profile |
+|---|---|---|
+| Open in a background tab (`b`) | +0.15 | 0.05 |
+| Read as a card | +0.05 | 0.02 |
+| Reading for more than 15 seconds | +0.10 | none |
+| Save | positive | yes |
+| Dismiss | negative | none |
+
+Everything fades with a 14 day half life. The full schema, including the event log, is in [docs/SCHEMA.md](docs/SCHEMA.md).
+
+## Architecture
+
+```
+Miniflux (feeds, entries, read state, stars, icons, full-article fetch)
+        |
+ background page (engine: scoring, event log, retention, sync, pending queue)
+        |                          |
+ reader page (UI)          Fastmail WebDAV (append-only event files, one per machine)
+                                   |
+                           Raindrop (optional: tag vocabulary, one-way saving)
+```
+
+- `extension/src/engine.js` holds the state and the rules; `eventlog.js` merges events by set union; `scoring.js` scores; `miniflux.js`, `webdav.js` and `raindrop.js` are thin clients; `handlers.js` is the message layer between the reader and the engine; `safehtml.js` sanitises article HTML; `anchor.js` applies anchor bolding.
+- The reader page never uses `innerHTML` for article text. Article HTML is parsed in an inert document and only allowlisted elements are rebuilt as DOM nodes.
+
+## Privacy and security
+
+No telemetry. Data goes only to servers you configure. Credentials are stored unencrypted in the Firefox profile (use a limited app password and a revocable Miniflux key). Thumbnails and article images load from publishers' sites and can be switched off. See [docs/POLICY.md](docs/POLICY.md) for the full review.
+
+## Troubleshooting
+
+| Symptom | Likely cause and fix |
+|---|---|
+| Red light on Miniflux | Wrong address or key, or the key was revoked. Retest on Settings, Connections. |
+| WebDAV test fails | Use a Fastmail app password with Files access, not the account password. |
+| Firefox asks for permission on Test | You entered a custom server address; allow it once. |
+| Full article button does nothing useful | Miniflux could not fetch that page (paywall or blocking). The excerpt stays. |
+| Two machines rank slightly differently | Expected until both hold the same history and Raindrop data. |
+| A feed shows a red dot | Miniflux reports parsing errors for it; it is excluded from ranking. |
+
+## Development
+
+```
+npm install
+npm test            # 89 tests: engine, event log, sync, services, reader screen under jsdom
+npm run lint        # Mozilla's web-ext lint
+node tools/failure-rates.mjs 150 --write
+node tools/example-run.mjs
+python3 tools/screenshots/shoot.py   # regenerates docs/screenshots (needs Chrome and playwright)
+```
+
+## Install (short version)
 
 See [DEPLOY.md](DEPLOY.md). The short version: download `pravaha.xpi` from the latest release, open `about:addons` in Firefox, click the gear icon and choose Install Add-on From File. Then open the extension's button, go to Settings and enter your Miniflux address and API key.
 
