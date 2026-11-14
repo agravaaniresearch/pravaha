@@ -250,3 +250,4 @@ button.kw:hover { background: var(--hover); }
 .row[data-saved="true"] .rtitle::after { content: " \2605"; color: var(--accent); font-size: .8em; }
 .prose .bf, .sample .bf { font-weight: 600; }
 .prose .br, .sample .br { opacity: .9; }
+.errstack { max-width: 90vw; margin: 12px auto; padding: 8px; font-size: 11px; text-align: left; white-space: pre-wrap; opacity: .7; }

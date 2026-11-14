@@ -85,3 +85,12 @@ test("anchor bolding keeps the article text identical", () => {
   const box = render("<p>Analysts noted that the contract sets a pattern for future orders across several yards.</p><p>Officials said <em>delivery</em> schedules would depend on steel supply.</p>"); const before = box.textContent;
   anchorTree(box, 4, box.ownerDocument); assert.equal(box.textContent, before);
 });
+
+import { gradeColor, disp } from "../extension/src/grade.js";
+test("colour grading never throws on a missing or non-numeric score", () => {
+  for (const v of [undefined, null, NaN, "x", Infinity]) { assert.equal(Number.isFinite(disp(v)), true); assert.match(gradeColor(v, "ember").bg, /^rgb/); assert.match(gradeColor(v, "nonexistent").bg, /^rgb/); }
+});
+test("an article with a missing published date still gets a finite score", async () => {
+  const { e } = await engineOf((w) => { const x = w.mf.st.entries.find(i => i.id === 1); x.published_at = undefined; x.reading_time = null; x.tags = null; x.enclosures = null; });
+  const rows = e.getView({ scope: "all", mode: "unread", ranked: true }).groups.flatMap(g => g.rows); assert.ok(rows.length > 0); assert.ok(rows.every(r => Number.isFinite(r.score)));
+});

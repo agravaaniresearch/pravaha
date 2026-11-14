@@ -499,4 +499,4 @@ document.addEventListener("keydown", (e) => {
   if (handled) e.preventDefault();
 });
 
-boot().catch(err => { $app.replaceChildren(h("div", { class: "empty" }, h("div", { class: "t" }, "Pravaha could not start"), h("div", {}, String(err && err.message || err)))); });
+boot().catch(err => { $app.replaceChildren(h("div", { class: "empty" }, h("div", { class: "t" }, "Pravaha could not start"), h("div", {}, String(err && err.message || err)), h("pre", { class: "errstack" }, String(err && err.stack || "").split("\n").slice(0, 6).join("\n")))); });

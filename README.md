@@ -147,7 +147,7 @@ No telemetry. Data goes only to servers you configure. Credentials are stored un
 
 ```
 npm install
-npm test            # 89 tests: engine, event log, sync, services, reader screen under jsdom
+npm test            # 91 tests: engine, event log, sync, services, reader screen under jsdom
 npm run lint        # Mozilla's web-ext lint
 node tools/failure-rates.mjs 150 --write
 node tools/example-run.mjs
@@ -162,7 +162,7 @@ See [DEPLOY.md](DEPLOY.md). The short version: download `pravaha.xpi` from the l
 
 ```
 npm install
-npm test                       # 89 tests
+npm test                       # 91 tests
 node tools/failure-rates.mjs   # random failure injection, see docs/FAILURE_RATES.md
 npm run lint                   # Mozilla's web-ext lint
 ```

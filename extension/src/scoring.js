@@ -41,11 +41,11 @@ export function scoreItem(item, ctx) {
   if (visits >= 3) echoCos += 0.15;
   const echo = squash(echoCos);
   const authority = authorityOf((ctx.authorityDelta && ctx.authorityDelta[item.feedId]) || 0);
-  const fresh = freshness((ctx.now - item.publishedAt) / 3600000);
+  const fresh = freshness((ctx.now - (Number.isFinite(item.publishedAt) ? item.publishedAt : ctx.now)) / 3600000);
   const training = trainingAdjust(item, ctx.training || []);
   let raw = w.tag * tag + w.echo * echo + w.authority * authority + w.freshness * fresh + training;
   const novelty = ctx.novelty !== false && ctx.sessionFeeds && !ctx.sessionFeeds.has(item.feedId) ? NOVELTY_BOOST : 1;
-  let final = clamp(raw * novelty);
+  let final = clamp(Number.isFinite(raw * novelty) ? raw * novelty : 0);
   const enr = ctx.enrichment && ctx.enrichment[item.id];
   if (enr && typeof enr.score === "number") final = clamp(0.8 * final + 0.2 * enr.score);
   return {
