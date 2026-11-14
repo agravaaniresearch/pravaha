@@ -63,6 +63,6 @@ with outside score s:  final = 0.8*final + 0.2*s
 `settings`, `cache` (articles and feeds), `bodies` (article HTML fetched on demand, trimmed with the cache), `icons` (feed icons as data URLs), `events`, `syncState`, `pendingOps` (Miniflux changes waiting to send), `raindropCache`, `echoLocal`, `enrichment`, `net`, `others`, `pendingHistory`. Dwell tracker state is kept in `storage.session` because the background page can unload.
 
 
-Interface preferences (theme, palette, density, thumbnails, read on scroll, reading type) and collapsed feeds live in the reader page's `localStorage` under `pravaha.ui` and `pravaha.collapsed`. They stay on the machine and are not synced.
+Interface preferences (theme, palette, density, thumbnails, read on scroll, reading type, anchor bolding and strength) and collapsed feeds live in the reader page's `localStorage` under `pravaha.ui` and `pravaha.collapsed`. They stay on the machine and are not synced.
 
 Bundled fonts, all under the SIL Open Font Licence (licences are in `extension/ui/fonts/`): IBM Plex Sans for the interface, Newsreader and Literata for reading.

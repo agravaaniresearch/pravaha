@@ -12,6 +12,8 @@ This is a design review of a personal tool, not legal advice.
 
 - **Thumbnails and images.** When thumbnails or article images are shown, the browser loads them from the publisher's site, which reveals the user's IP address to that site. Thumbnails can be turned off in Settings. Feed icons come from Miniflux, not from publishers.
 
+- **Bundled code.** `extension/vendor/text-vide.mjs` is text-vide 1.8.6 (MIT, licence file alongside). It runs locally on text nodes of already sanitised content and makes no network calls. The name "Bionic Reading" is a registered mark of its owner, so the interface calls the setting "Anchor bolding".
+
 ## Third-party terms
 
 - **Miniflux.** Uses the documented REST API with a personal API key. Polling is every two minutes by default against the user's own account, which is within normal use for a hosted account. Raise the interval if the host asks.

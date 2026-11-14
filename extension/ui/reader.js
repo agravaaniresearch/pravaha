@@ -2,6 +2,7 @@
 import { h, icon, pct, ago, longAgo } from "./dom.js";
 import { gradeColor, disp } from "../src/grade.js";
 import { renderSafe } from "../src/safehtml.js";
+import { anchorTree } from "../src/anchor.js";
 import { loadPrefs, savePrefs, applyPrefs, clamp } from "./prefs.js";
 
 const $app = document.getElementById("app");
@@ -19,7 +20,9 @@ export const S = {
 };
 let U = loadPrefs();
 const prefersDark = () => !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
-const setPref = (patch) => { U = { ...U, ...patch }; savePrefs(U); applyPrefs(U, document.documentElement, prefersDark()); };
+const setPref = (patch) => { U = { ...U, ...patch }; savePrefs(U); applyPrefs(U, document.documentElement, prefersDark()); if ("anchor" in patch || "anchorLevel" in patch) { refillOpenCard(); anchorSamples(); } };
+function anchorSamples() { for (const el of $app.querySelectorAll("[data-sample]")) { el.textContent = el.dataset.sample; if (U.anchor) anchorTree(el, U.anchorLevel, document); } }
+function refillOpenCard() { const r = S.openCard && S.rows.get(S.openCard); if (r && rowElById(r.id)) fillCard(r); }
 export const disposeForTests = () => { clearTimeout(toastTimer); };
 
 // ---------- small utilities ----------
@@ -157,6 +160,7 @@ function fillCard(r) {
   const body = c.loading && !c.html ? h("div", { class: "skeleton", "aria-busy": "true" }, [90, 100, 96, 70, 100, 88].map(w => h("i", { style: { width: w + "%" } })))
     : c.html != null && c.html.trim() ? h("div", { class: "prose", lang: "en" }, renderSafe(c.html, document))
     : h("div", { class: "prose" }, h("p", {}, r.summary || "Miniflux has no text for this article."));
+  if (U.anchor && body.classList.contains("prose")) anchorTree(body, U.anchorLevel, document);
   const need = c.html != null && !c.full && r.words && r.words < 150;
   const stems = [...new Set((r.title || "").toLowerCase().split(/[^\p{L}\p{N}]+/u))].filter(t => t.length > 4).slice(0, 4);
   const rule = (type, key) => (S.rules.find(x => x.type === type && x.key === String(key).toLowerCase()) || {}).value || 0;
@@ -344,7 +348,10 @@ function renderPop() {
   $app.append(h("div", { class: "pop", role: "dialog", "aria-label": "Reading type", onclick: (e) => e.stopPropagation() },
     h("div", { class: "seg" }, [["newsreader", "Newsreader"], ["literata", "Literata"]].map(([id, l]) => h("button", { "aria-pressed": String(U.readFont === id), style: { fontFamily: `var(--serif-${id})`, flex: 1, justifyContent: "center" }, onclick: () => { setPref({ readFont: id }); renderPop(); } }, l))),
     range("Size", "readSize", 15, 26, 1, (v) => v + "px"), range("Line gap", "readLine", 1.3, 2, 0.05, (v) => Number(v).toFixed(2)), range("Width", "readWidth", 46, 90, 2, (v) => v + "ch"),
-    h("p", { class: "prose", style: { margin: 0, fontSize: "calc(var(--read-size) * .9)" } }, "The quick brown fox reads the morning news, one calm paragraph at a time.")));
+    h("label", { class: "check" }, h("input", { type: "checkbox", checked: U.anchor, onchange: (e) => { setPref({ anchor: e.target.checked }); renderPop(); } }), "Anchor bolding"),
+    range("Strength", "anchorLevel", 1, 5, 1, (v) => ["", "Lightest", "Light", "Medium", "Strong", "Strongest"][v]),
+    h("p", { class: "prose", "data-sample": "The quick brown fox reads the morning news, one calm paragraph at a time.", style: { margin: 0, fontSize: "calc(var(--read-size) * .9)" } }, "The quick brown fox reads the morning news, one calm paragraph at a time.")));
+  anchorSamples();
 }
 document.addEventListener("click", (e) => { if (S.pop && !e.target.closest(".pop") && !e.target.closest(".aa")) { S.pop = null; renderPop(); renderChrome(); } });
 const SHORTCUTS = [["j / k", "Next or previous article (opens it if a card is open)"], ["o or Enter", "Read here as a card"], ["b", "Open in a background tab, counted as interest"], ["w", "Fetch the full article (the coffee button)"], ["s", "Save or unsave"], ["x", "Dismiss"], ["m", "Mark read or unread"], ["Shift+A", "Mark the section read and fold it"], ["c", "Fold or unfold the section"], ["Shift+C", "Fold or unfold every section"], ["u", "Switch between Unread and All"], ["r", "Sync now"], ["/", "Search"], ["Esc", "Close the card or this panel"], ["?", "Show this list"]];
@@ -364,7 +371,7 @@ function afterMain() {
   const sub = $app.querySelector(".sub"); const topH = 52 + (sub ? sub.getBoundingClientRect().height : 0);
   document.documentElement.style.setProperty("--ghead-top", Math.round(topH) + "px");
   if (S.openCard && S.rows.has(S.openCard)) { const r = S.rows.get(S.openCard); const el = rowElById(r.id); if (el) { el.dataset.card = "true"; fillCard(r); } }
-  showBanner(); observeRows();
+  showBanner(); observeRows(); anchorSamples();
 }
 
 // ---------- stats ----------
@@ -448,7 +455,8 @@ function settingsMain() {
     chk("Show thumbnails (these load from the publisher's site)", U, "thumbs", (v) => { setPref({ thumbs: v }); }), chk("Mark articles read as they scroll past the top", U, "scrollRead", (v) => { setPref({ scrollRead: v }); })),
     h("div", { class: "panel" }, h("h2", {}, "Reading type"), h("div", { class: "seg", style: { width: "max-content" } }, [["newsreader", "Newsreader"], ["literata", "Literata"]].map(([id, l]) => h("button", { "aria-pressed": String(U.readFont === id), style: { fontFamily: `var(--serif-${id})` }, onclick: () => { setPref({ readFont: id }); renderMain(); } }, l))),
       range("Size", "readSize", 15, 26, 1, (v) => v + "px"), range("Line gap", "readLine", 1.3, 2, 0.05, (v) => Number(v).toFixed(2)), range("Width", "readWidth", 46, 90, 2, (v) => v + "ch"),
-      h("div", { class: "sample prose" }, h("p", {}, "Reading is a daily discipline. A comfortable measure, a generous line gap and a calm serif let a long article carry you along without effort."), h("p", {}, "Changes apply instantly and stay on this machine.")))];
+      chk("Anchor bolding: bold the start of each word (English and other Latin text)", U, "anchor", (v) => { setPref({ anchor: v }); renderMain(); }), range("Anchor strength", "anchorLevel", 1, 5, 1, (v) => ["", "Lightest", "Light", "Medium", "Strong", "Strongest"][v]),
+      h("div", { class: "sample prose" }, h("p", { "data-sample": "Reading is a daily discipline. A comfortable measure, a generous line gap and a calm serif let a long article carry you along without effort." }, "Reading is a daily discipline. A comfortable measure, a generous line gap and a calm serif let a long article carry you along without effort."), h("p", { "data-sample": "Changes apply instantly and stay on this machine." }, "Changes apply instantly and stay on this machine.")))];
   else if (tab === "ranking") content = [h("div", { class: "panel" }, h("h2", {}, "Relevance weights"), ...[["tag", "Tag match"], ["echo", "Sites you read"], ["authority", "Feed standing"], ["freshness", "Freshness"]].map(([k, l]) => { const out = h("span", {}, pct(d.weights[k])); return h("label", { class: "range" }, h("span", {}, l), h("input", { type: "range", min: 0, max: 1, step: 0.05, value: d.weights[k], oninput: (e) => { d.weights[k] = Number(e.target.value); out.textContent = pct(d.weights[k]); markDirty(); } }), out); }),
     h("p", { class: "note" }, "Only the proportions matter. They are rescaled to add up to one when saved."), chk("Boost feeds I have not opened this session", d, "novelty"))];
   else if (tab === "machine") content = [h("div", { class: "panel" }, h("h2", {}, "This machine"), h("div", { class: "grid2" }, inp("Machine name (set once, keep it)", d, "device"), inp("Check for new articles every (minutes)", d, "pollMinutes", "number"), inp("Keep read articles for (days)", d, "retentionDays", "number")), chk("Write the weekly digest automatically", d, "autoDigest"))];

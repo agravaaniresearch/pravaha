@@ -49,3 +49,28 @@ test("testConnection tests unsaved draft credentials and explains failures in pl
   const bad = await testConnection("miniflux", { miniflux: { url: "https://mf.test", token: "nope" } }, e, w.fetchImpl); assert.equal(bad.ok, false); assert.match(bad.sentence, /refused the API key/);
   const dav = await testConnection("webdav", { webdav: { url: "https://dav.test", user: "u", pass: "p", root: "pravaha" } }, e, w.fetchImpl); assert.equal(dav.ok, true);
 });
+
+import { anchorText, runs, anchorTree } from "../extension/src/anchor.js";
+test("anchor bolding bolds the start of words and leaves punctuation, numbers and spacing intact", () => {
+  const r = runs("Analysts noted the 2026 contract, e.g. R&D.", 3); assert.equal(r.map(x => x.text).join(""), "Analysts noted the 2026 contract, e.g. R&D.");
+  assert.deepEqual(r.filter(x => x.bold).map(x => x.text).slice(0, 2), ["Anal", "not"]);
+  assert.ok(!anchorText("plain").includes("<b>"), "uses private markers, never HTML tags");
+});
+test("anchor strength runs from light to strong", () => {
+  const bolded = (n) => runs("extraordinary", n).filter(x => x.bold).map(x => x.text).join("").length;
+  assert.ok(bolded(1) < bolded(3) && bolded(3) < bolded(5));
+});
+test("anchor bolding treats literal angle brackets as text and cannot create elements", () => {
+  const d = doc(); const p = d.createElement("p"); p.textContent = "if a < b and c > d then <script>alert(1)</script> &amp; done"; anchorTree(p, 3, d);
+  assert.equal(p.querySelectorAll("script").length, 0); assert.equal(p.textContent, "if a < b and c > d then <script>alert(1)</script> &amp; done");
+  assert.ok(p.querySelectorAll(".bf").length > 3);
+});
+test("anchor bolding skips code, preformatted text and headings, and keeps links working", () => {
+  const box = render('<h2>Heading words</h2><p>Plain <a href="https://ok.example/x">linked words</a> and <code>code words</code></p><pre>pre words</pre>');
+  anchorTree(box, 3, box.ownerDocument);
+  assert.equal(box.querySelectorAll("h2 .bf, code .bf, pre .bf").length, 0); assert.ok(box.querySelectorAll("p > .bf").length > 0);
+  assert.ok(box.querySelectorAll("a .bf").length > 0); assert.equal(box.querySelector("a").getAttribute("href"), "https://ok.example/x");
+});
+test("anchor bolding ignores private-use characters in the source text", () => {
+  const r = runs("odd text here", 3); assert.equal(r.map(x => x.text).join(""), "odd text here");
+});

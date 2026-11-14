@@ -126,3 +126,15 @@ test("a background change shows a banner for new articles instead of reshuffling
   await t.engine.syncNow(); await wait(700); assert.equal(t.$$(".row").length, before); assert.match(t.$(".banner").textContent, /1 new article/);
   t.$(".banner").click(); await wait(150); assert.ok(rowByTitle(t, "Brand new pasta")); t.close();
 });
+
+test("anchor bolding is off by default, turns on from the Aa popover, updates the open card live and is remembered", async () => {
+  const t = await mount({ prep: (w) => { w.mf.st.entries.find(e => e.id === 1).content = "<p>Analysts noted the contract sets a pattern for future orders.</p><h2>Heading words</h2><pre>code words here</pre>"; } });
+  const row = rowByTitle(t, "Navy orders"); row.querySelector(".rtitle").click(); await wait(160);
+  assert.equal(row.querySelectorAll(".prose .bf").length, 0, "off by default");
+  t.$(".aa").click(); const box = t.$(".pop input[type=checkbox]"); box.checked = true; box.dispatchEvent(new t.win.Event("change", { bubbles: true })); await wait(60);
+  assert.ok(row.querySelectorAll(".prose .bf").length >= 5, "open card is re-rendered with bolding"); assert.equal(row.querySelectorAll(".prose h2 .bf, .prose pre .bf").length, 0);
+  assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).anchor, true); assert.ok(t.$(".pop [data-sample] .bf"), "preview in the popover is bolded");
+  const light = row.querySelectorAll(".prose .bf").length; const sl = t.$$(".pop input[type=range]").find(i => i.max === "5"); sl.value = "5"; sl.dispatchEvent(new t.win.Event("input", { bubbles: true })); await wait(60);
+  assert.notEqual(row.querySelectorAll(".prose .bf")[0].textContent.length, 0); assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).anchorLevel, 5);
+  assert.equal(row.querySelector(".prose").textContent.includes("Analysts noted the contract"), true, "text content is unchanged"); void light; t.close();
+});
