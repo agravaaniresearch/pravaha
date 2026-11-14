@@ -1,0 +1,18 @@
+{
+  "name": "pravaha",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pravaha: a relevance-ranked Firefox reader on top of Miniflux",
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "failure-rates": "node tools/failure-rates.mjs",
+    "lint": "web-ext lint --source-dir extension",
+    "build": "web-ext build --source-dir extension --artifacts-dir dist --overwrite-dest"
+  },
+  "devDependencies": {
+    "@fontsource-variable/fraunces": "^5.0.0",
+    "@fontsource-variable/inter": "^5.0.0",
+    "web-ext": "^8.0.0"
+  }
+}
