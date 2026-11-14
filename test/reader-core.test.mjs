@@ -50,27 +50,38 @@ test("testConnection tests unsaved draft credentials and explains failures in pl
   const dav = await testConnection("webdav", { webdav: { url: "https://dav.test", user: "u", pass: "p", root: "pravaha" } }, e, w.fetchImpl); assert.equal(dav.ok, true);
 });
 
-import { anchorText, runs, anchorTree } from "../extension/src/anchor.js";
-test("anchor bolding bolds the start of words and leaves punctuation, numbers and spacing intact", () => {
-  const r = runs("Analysts noted the 2026 contract, e.g. R&D.", 3); assert.equal(r.map(x => x.text).join(""), "Analysts noted the 2026 contract, e.g. R&D.");
-  assert.deepEqual(r.filter(x => x.bold).map(x => x.text).slice(0, 2), ["Anal", "not"]);
-  assert.ok(!anchorText("plain").includes("<b>"), "uses private markers, never HTML tags");
+import { anchorTree, runs } from "../extension/src/anchor.js";
+import { bionifyWord, bionifyText, parseAlgorithm, defaultAlgorithm } from "../extension/vendor/bionify.mjs";
+const algo = parseAlgorithm(defaultAlgorithm);
+test("Bionify rules are unchanged: size table 0 1 1 2, ratio 0.4, common short words left alone", () => {
+  assert.deepEqual(algo, { exclude: true, sizes: ["0", "1", "1", "2"], restRatio: 0.4 });
+  assert.deepEqual(bionifyWord("I", algo), ["", "I"]); assert.equal(bionifyWord("a", algo), null); assert.deepEqual(bionifyWord("up", algo), ["u", "p"]); assert.deepEqual(bionifyWord("sea", algo), ["s", "ea"]); assert.deepEqual(bionifyWord("navy", algo), ["na", "vy"]);
+  assert.deepEqual(bionifyWord("analysts", algo), ["Anal".toLowerCase(), "ysts"]); assert.deepEqual(bionifyWord("contract", algo), ["cont", "ract"]);
+  assert.equal(bionifyWord("the", algo), null); assert.equal(bionifyWord("and", algo), null); assert.notEqual(bionifyWord("The", algo), null, "match is case sensitive, as upstream");
+});
+test("Bionify text rules: short text is left alone and spacing is preserved exactly", () => {
+  assert.deepEqual(bionifyText("short", algo), [{ text: "short", kind: "plain" }]);
+  const t = "Analysts  noted the contract, e.g. R&D."; assert.equal(bionifyText(t, algo).map(p => p.text).join(""), t);
 });
 test("anchor strength runs from light to strong", () => {
-  const bolded = (n) => runs("extraordinary", n).filter(x => x.bold).map(x => x.text).join("").length;
-  assert.ok(bolded(1) < bolded(3) && bolded(3) < bolded(5));
+  const bolded = (n) => runs("extraordinary circumstances prevailed", n).filter(x => x.bold).map(x => x.text).join("").length;
+  assert.ok(bolded(1) < bolded(3) && bolded(3) < bolded(5)); assert.equal(bolded(3), bolded(3));
 });
 test("anchor bolding treats literal angle brackets as text and cannot create elements", () => {
-  const d = doc(); const p = d.createElement("p"); p.textContent = "if a < b and c > d then <script>alert(1)</script> &amp; done"; anchorTree(p, 3, d);
-  assert.equal(p.querySelectorAll("script").length, 0); assert.equal(p.textContent, "if a < b and c > d then <script>alert(1)</script> &amp; done");
-  assert.ok(p.querySelectorAll(".bf").length > 3);
+  const d = doc(); const p = d.createElement("p"); const src = "if a < b and c > d then <script>alert(1)</script> &amp; done"; p.textContent = src; anchorTree(p, 3, d);
+  assert.equal(p.querySelectorAll("script").length, 0); assert.equal(p.textContent, src); assert.ok(p.querySelectorAll(".bf").length > 3);
 });
 test("anchor bolding skips code, preformatted text and headings, and keeps links working", () => {
-  const box = render('<h2>Heading words</h2><p>Plain <a href="https://ok.example/x">linked words</a> and <code>code words</code></p><pre>pre words</pre>');
+  const box = render('<h2>Heading words here for the test</h2><p>Plain text that comes before the link <a href="https://ok.example/x">linked words in the middle</a> and <code>code words in a code span</code></p><pre>preformatted words in a block</pre>');
   anchorTree(box, 3, box.ownerDocument);
   assert.equal(box.querySelectorAll("h2 .bf, code .bf, pre .bf").length, 0); assert.ok(box.querySelectorAll("p > .bf").length > 0);
   assert.ok(box.querySelectorAll("a .bf").length > 0); assert.equal(box.querySelector("a").getAttribute("href"), "https://ok.example/x");
 });
-test("anchor bolding ignores private-use characters in the source text", () => {
-  const r = runs("odd text here", 3); assert.equal(r.map(x => x.text).join(""), "odd text here");
+test("anchor bolding leaves short text nodes and non-Latin text unchanged", () => {
+  const box = render("<p>Tiny bit</p><p>यह एक हिंदी वाक्य है जो काफ़ी लंबा है और नहीं बदलेगा</p>"); const before = box.textContent; anchorTree(box, 3, box.ownerDocument);
+  assert.equal(box.querySelectorAll(".bf").length, 0); assert.equal(box.textContent, before);
+});
+test("anchor bolding keeps the article text identical", () => {
+  const box = render("<p>Analysts noted that the contract sets a pattern for future orders across several yards.</p><p>Officials said <em>delivery</em> schedules would depend on steel supply.</p>"); const before = box.textContent;
+  anchorTree(box, 4, box.ownerDocument); assert.equal(box.textContent, before);
 });

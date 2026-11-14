@@ -12,7 +12,7 @@ This is a design review of a personal tool, not legal advice.
 
 - **Thumbnails and images.** When thumbnails or article images are shown, the browser loads them from the publisher's site, which reveals the user's IP address to that site. Thumbnails can be turned off in Settings. Feed icons come from Miniflux, not from publishers.
 
-- **Bundled code.** `extension/vendor/text-vide.mjs` is text-vide 1.8.6 (MIT, licence file alongside). It runs locally on text nodes of already sanitised content and makes no network calls. The name "Bionic Reading" is a registered mark of its owner, so the interface calls the setting "Anchor bolding".
+- **Bundled code.** `extension/vendor/bionify.mjs` carries the word rules of Bionify (GPL-3.0, licence file alongside), with the delivery changed so it builds DOM nodes instead of assigning HTML. It runs locally on text nodes of already sanitised content and makes no network calls. Because it includes GPL-3.0 code, Pravaha as a whole is distributed under GPL-3.0: anyone who receives the add-on is entitled to the source, which the source zip provides. The name "Bionic Reading" is a registered mark of its owner, so the interface calls the setting "Anchor bolding".
 
 ## Third-party terms
 

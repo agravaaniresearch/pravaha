@@ -11,7 +11,7 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Reads in place.** Opening an article shows it as a card inside the list, in Newsreader or Literata. Press `w` (the coffee cup) to ask Miniflux for the complete article. Press `b` to open it in a background tab. Both are logged, and a background open counts more than a card read.
 - **Stays organised.** Feeds are collapsible sections with their Miniflux icon and an unread count. Marking a section read folds it away. Articles can be marked read as they scroll past the top. The tabs are Newsfeed, Saved, Stats, Sync and Settings.
 - **Uses what Miniflux offers.** Thumbnails, reading time, word count, comment links, tags, audio and video enclosures and the full-article flag show as small chips.
-- **Offers anchor bolding** (off by default): the first part of each word is bolded to give the eye a landing point. A strength control runs from lightest to strongest. It uses [text-vide](https://github.com/Gumball12/text-vide) (MIT, vendored in `extension/vendor`), an open implementation of the technique, and was inspired by the Open|Bionic project. It skips headings and code and works on Latin script only. Independent evidence that it speeds reading is weak, so treat it as a preference.
+- **Offers anchor bolding** (off by default): the first part of each word is bolded to give the eye a landing point. A strength control runs from lightest to strongest. The word rules are Bionify's, vendored unchanged in `extension/vendor/bionify.mjs` (see the licence section), and applied to the article as DOM nodes rather than HTML. The idea was prompted by the Open|Bionic project. It skips headings and code and works on Latin script only. Independent evidence that it speeds reading is weak, so treat it as a preference.
 - **Has an OLED black theme** besides light and dark, and four reading controls: type, size, line gap and width.
 - **Shows relevance as colour.** There are no Good, Great or Best tiers. Each row has a bar and a chip that darken as the score rises. Three palettes are included: ember, saffron and moss.
 - **Learns from what you do.** Opening in a tab, reading a card, reading for more than 15 seconds, saving and dismissing all move a feed's standing. They fade with a 14 day half life. Opens and saves also pull your interest profile toward the article.
@@ -67,7 +67,7 @@ See [DEPLOY.md](DEPLOY.md). The short version: download `pravaha.xpi` from the l
 
 ```
 npm install
-npm test                       # 87 tests
+npm test                       # 89 tests
 node tools/failure-rates.mjs   # random failure injection, see docs/FAILURE_RATES.md
 npm run lint                   # Mozilla's web-ext lint
 ```
@@ -98,6 +98,10 @@ docs/               schema, policy review, failure rates
 ```
 
 See [docs/SCHEMA.md](docs/SCHEMA.md), [docs/POLICY.md](docs/POLICY.md) and [docs/FAILURE_RATES.md](docs/FAILURE_RATES.md).
+
+## Licence
+
+Pravaha includes code from Bionify (GPL-3.0), so it is released under the GNU General Public License v3. The full text is in `LICENSE`. Bundled fonts are under the SIL Open Font Licence (see `extension/ui/fonts`).
 
 ## Disclaimer
 
