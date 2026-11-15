@@ -10,13 +10,16 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 GECKO_ID = "pravaha@agravaani"
 UUIDS = {"A": "11111111-1111-4111-8111-111111111111", "B": "22222222-2222-4222-8222-222222222222", "C": "33333333-3333-4333-8333-333333333333"}
 
-def build_ext(dst):
+def build_ext(dst, with_apple=None):
     """Copy the extension and let it reach the local fake services over http."""
     if os.path.exists(dst): shutil.rmtree(dst)
-    shutil.copytree(os.path.join(ROOT, "extension"), dst, ignore=shutil.ignore_patterns("apple"))
+    with_apple = os.environ.get("WITH_APPLE") == "1" if with_apple is None else with_apple  # the Apple fonts are git-ignored; with them present the real fonts load
+    shutil.copytree(os.path.join(ROOT, "extension"), dst, ignore=None if with_apple else shutil.ignore_patterns("apple"))
     mp = os.path.join(dst, "manifest.json"); m = json.load(open(mp))
     m["host_permissions"] = m["host_permissions"] + ["http://127.0.0.1/*"]
     json.dump(m, open(mp, "w"), indent=1)
+    rp = os.path.join(dst, "src", "raindrop.js"); r = open(rp).read()  # the copy under test talks to the local fake, never to the real Raindrop
+    open(rp, "w").write(r.replace("https://api.raindrop.io/rest/v1", "http://127.0.0.1:8799/rd/rest/v1"))
     return dst
 
 class Browser:

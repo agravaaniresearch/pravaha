@@ -278,14 +278,14 @@ test("the Bionic button sits in the top bar and the card; Shift+B toggles; the c
   t.key("B", { shiftKey: true }); await wait(60); assert.equal(row.querySelectorAll(".prose .bf").length, 0); assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).anchor, false);
   row.querySelector(".btn.bionic").click(); await wait(60); assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).anchor, true); assert.match(t.$$(".toast").at(-1).textContent, /Bionic reading is on/); assert.doesNotMatch(t.$$(".toast").at(-1).textContent, /null/); t.close();
 });
-test("more fonts: reading and interface fonts apply at once, are remembered, and an unknown value falls back safely", async () => {
-  const t = await mount(); t.$(".aa").click(); const rf = t.$(".pop select"); assert.ok([...rf.options].length >= 11, "eleven reading fonts"); assert.equal(rf.querySelectorAll("optgroup").length, 2, "serif and sans groups"); rf.value = "lora"; rf.dispatchEvent(new t.win.Event("change", { bubbles: true })); await wait(40);
-  assert.equal(t.win.document.documentElement.style.getPropertyValue("--read-font"), "var(--serif-lora)"); assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).readFont, "lora");
+test("fonts: only New York and SF Pro are bundled; a choice applies at once and is remembered, and an old or unknown value falls back safely", async () => {
+  const t = await mount(); t.$(".aa").click(); const rf = t.$(".pop select"); assert.equal([...rf.options].length, 3, "New York, SF Pro and the system serif"); assert.equal(rf.querySelectorAll("optgroup").length, 2, "serif and sans groups"); rf.value = "sfpro"; rf.dispatchEvent(new t.win.Event("change", { bubbles: true })); await wait(40);
+  assert.equal(t.win.document.documentElement.style.getPropertyValue("--read-font"), "var(--serif-sfpro)"); assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).readFont, "sfpro");
   t.$$(".tab").find(b => b.textContent.includes("Settings")).click(); await wait(60); t.$$(".stab").find(b => b.textContent.includes("Look")).click(); await wait(40);
   const cards = (label) => t.$$(".fontcard").filter(c => c.querySelector(".fname").textContent.startsWith(label));
-  const ui = cards("Source Sans")[0]; assert.ok(ui, "a card for the interface font"); ui.click(); await wait(30);
-  assert.equal(t.win.document.documentElement.style.getPropertyValue("--ui"), "var(--ui-sourcesans)"); t.close();
-  const bad = await mount({ prefs: { readFont: "comic-sans", uiFont: "x", confirmRead: "sometimes" } }); assert.equal(bad.win.document.documentElement.style.getPropertyValue("--read-font"), "var(--serif-newsreader)"); assert.equal(bad.win.document.documentElement.style.getPropertyValue("--ui"), "var(--ui-plex)"); bad.close();
+  const ui = cards("System").find(c => c.querySelector(".fname").textContent.replace("In use", "") === "System"); assert.ok(ui, "a card for the system interface font"); ui.click(); await wait(30);
+  assert.equal(t.win.document.documentElement.style.getPropertyValue("--ui"), "var(--ui-system)"); t.close();
+  for (const old of ["newsreader", "literata", "lora", "ubuntu", "atkinson", "comic-sans"]) { const bad = await mount({ prefs: { readFont: old, uiFont: old === "comic-sans" ? "x" : "plex", confirmRead: "sometimes" } }); assert.equal(bad.win.document.documentElement.style.getPropertyValue("--read-font"), "var(--serif-newyork)", old + " falls back to New York"); assert.equal(bad.win.document.documentElement.style.getPropertyValue("--ui"), "var(--ui-sfpro)"); bad.close(); }
 });
 test("each section shows how much of it is read, and it moves as articles are read", async () => {
   const t = await mount(); const g = t.$$(".group").find(x => x.querySelector(".gtitle").textContent === "Naval Wire"); const w0 = g.querySelector(".gprog i").style.width; assert.equal(w0, "0%");
@@ -297,14 +297,14 @@ test("toasts survive a redraw, stack, replace duplicates and can be dismissed", 
   t.$(".toast .tx").click(); await wait(300); assert.equal(t.$$(".toast").length, 1); t.$$(".tab").find(b => b.textContent.includes("Stats")).click(); await wait(100); assert.equal(t.$$(".toast").length, 1, "a page change does not wipe it"); t.close();
 });
 
-test("Ubuntu, New York and SF Pro are offered, picked from cards and remembered", async () => {
+test("New York and SF Pro are offered, picked from cards and remembered, and nothing else is bundled", async () => {
   const t = await mount(); t.$$(".tab").find(b => b.textContent.includes("Settings")).click(); await wait(60); t.$$(".stab").find(b => b.textContent.includes("Look")).click(); await wait(40);
-  const names = (n) => t.$$(".fontcard").map(c => c.querySelector(".fname").textContent.replace("In use", "")); const all = names();
-  for (const f of ["Ubuntu", "SF Pro"]) assert.equal(all.filter(x => x === f).length, 2, f + " is in both pickers"); assert.equal(all.filter(x => x === "New York").length, 1, "New York is a serif, so only a reading font");
+  const names = () => t.$$(".fontcard").map(c => c.querySelector(".fname").textContent.replace("In use", "")); const all = names();
+  assert.equal(all.filter(x => x === "SF Pro").length, 2, "SF Pro is in both pickers"); assert.equal(all.filter(x => x === "New York").length, 1, "New York is a serif, so only a reading font");
+  assert.ok(!all.some(x => /Ubuntu|Plex|Newsreader|Literata|Lora|Atkinson|Merriweather|Crimson|Source/.test(x)), "no other family is offered");
   assert.equal(t.$$(".fonthead").length, 3, "the reading picker has Serif and Sans headings, the interface picker only Sans"); assert.ok(t.$$(".fontcard .fnote").every(n => n.textContent.length > 10), "every card says in words what the font is for");
   const pick = async (label, nth) => { t.$$(".fontcard").filter(c => c.querySelector(".fname").textContent.replace("In use", "") === label)[nth].click(); await wait(30); };
-  await pick("Ubuntu", 0); assert.equal(t.win.document.documentElement.style.getPropertyValue("--read-font"), "var(--serif-ubuntu)");
-  await pick("Ubuntu", 1); assert.equal(t.win.document.documentElement.style.getPropertyValue("--ui"), "var(--ui-ubuntu)");
+  await pick("SF Pro", 0); assert.equal(t.win.document.documentElement.style.getPropertyValue("--read-font"), "var(--serif-sfpro)");
   await pick("New York", 0); assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).readFont, "newyork");
   assert.equal(t.$$(".fontcard[aria-pressed='true']").length, 2, "one card is marked in use per picker"); t.close();
 });
@@ -450,4 +450,52 @@ test("a library of several hundred articles builds in slices: the first rows at 
   const t = await mount({ prep: (w) => { w.mf.st.feeds = Array.from({ length: 12 }, (_, i) => ({ ...w.mf.st.feeds[0], id: 20 + i, title: `Bulk ${i}` })); w.mf.st.entries = []; let id = 1000; for (let f = 0; f < 12; f++) for (let k = 0; k < 40; k++) w.mf.st.entries.push(entry(id++, 20 + f, `Bulk ${f} story ${k}`, "body text for the story", 1)); } });
   await until(() => t.$$(".row").length >= 60); assert.ok(t.$$(".group").length === 12);
   await until(() => t.$$(".row").length === 480, 8000); assert.equal(t.$$(".row").length, 480, "every article is eventually present"); t.close();
+});
+
+// ---------- 0.7.0: training in plain sight ----------
+const rowOf = (t, text) => rowByTitle(t, text);
+test("an open card shows its tags and words as buttons; one click is more, two is less, three clears, and the score pill follows", async () => {
+  const t = await mount(); const row = rowOf(t, "Navy orders"); row.querySelector(".rtitle").click(); await wait(250); const e0 = t.engine.scoreRow(1).score; const pill = () => Number(row.querySelector(".score").textContent);
+  const strip = row.querySelector(".tstrip"); assert.ok(strip, "the training strip is on the card, not hidden in a fold"); const chips = [...strip.querySelectorAll("button.tchip")]; assert.ok(chips.length >= 2, "tags and words are clickable");
+  const tag = chips.find(c => c.dataset.key === "defence"); assert.ok(tag, "a tag from the Raindrop vocabulary is offered"); assert.match(tag.getAttribute("aria-label"), /defence: neutral\. Click to see more of it/);
+  tag.click(); await wait(80); const now = () => [...row.querySelectorAll(".tchip")].find(c => c.dataset.key === "defence");
+  assert.equal(now().dataset.v, "1"); assert.equal(now().getAttribute("aria-pressed"), "true"); assert.match(row.querySelector(".tnote").textContent, /More of “defence”/); assert.ok(t.engine.trainingRules().some(r => r.type === "tag" && r.key === "defence" && r.value === 1));
+  const more = pill();
+  now().click(); await wait(80); assert.equal(now().dataset.v, "-1"); assert.match(row.querySelector(".tnote").textContent, /Less of “defence”/); assert.ok(t.engine.trainingRules().some(r => r.key === "defence" && r.value === -1)); const less = pill(); assert.ok(more > less, `the pill follows without a reload: more ${more}, less ${less}`);
+  now().click(); await wait(80); assert.equal(now().dataset.v, "0"); assert.ok(!t.engine.trainingRules().some(r => r.key === "defence"), "the third click clears the rule"); assert.equal(t.engine.scoreRow(1).score, e0, "and the score is exactly back"); assert.ok(pill() > less && pill() < more, "the pill sits between the two"); t.close();
+});
+test("the thumbs on a row and on its card train together, toggle, and say what they trained, with Undo", async () => {
+  const t = await mount(); const row = rowOf(t, "Navy orders"); const up = row.querySelector(".acts .rate[data-v='1']"), down = row.querySelector(".acts .rate[data-v='-1']"); assert.ok(up && down, "both thumbs are on the row"); assert.equal(up.getAttribute("aria-pressed"), "false");
+  const score0 = Number(row.querySelector(".score").textContent); up.click(); await wait(120);
+  assert.equal(row.dataset.rating, "1"); assert.equal(up.getAttribute("aria-pressed"), "true"); assert.ok(Number(row.querySelector(".score").textContent) >= score0); assert.match(t.$(".toast .tmsg").textContent, /^Noted\. More like this: /); assert.ok(t.$(".toast .tact").textContent === "Undo");
+  row.querySelector(".rtitle").click(); await wait(250); const cardUp = row.querySelector(".cacts .rate[data-v='1']"); assert.equal(cardUp.getAttribute("aria-pressed"), "true", "the card shows the thumb already pressed");
+  t.$(".toast .tact").click(); await wait(120); assert.equal(row.dataset.rating, "0"); assert.equal(cardUp.getAttribute("aria-pressed"), "false"); assert.deepEqual(t.engine.trainingRules(), [], "Undo took back every rule the thumb set");
+  row.querySelector(".cacts .rate[data-v='-1']").click(); await wait(120); assert.equal(row.dataset.rating, "-1"); assert.ok(t.engine.trainingRules().every(r => r.value < 0) && t.engine.trainingRules().length > 0); assert.match([...t.$$(".toast .tmsg")].pop().textContent, /^Noted\. Less like this/); t.close();
+});
+test("a tag a thumb already set to +0.3 flips to less on the first click, not to cleared", async () => {
+  const t = await mount(); const row = rowOf(t, "Navy orders"); row.querySelector(".rtitle").click(); await wait(250);
+  row.querySelector(".cacts .rate[data-v='1']").click(); await wait(150);
+  const chip = () => [...row.querySelectorAll(".tchip")].find(c => c.dataset.key === "defence"); assert.ok(chip(), "the tag chip is there"); assert.equal(chip().dataset.v, "1", "a thumb shows as more");
+  assert.ok(t.engine.trainingRules().some(r => r.type === "tag" && r.key === "defence" && Math.abs(r.value - 0.3) < 1e-9), "the thumb wrote 0.3");
+  chip().click(); await wait(120); assert.equal(chip().dataset.v, "-1"); assert.ok(t.engine.trainingRules().some(r => r.key === "defence" && r.value === -1), "one click makes it a full less");
+  chip().click(); await wait(120); assert.equal(chip().dataset.v, "0"); assert.ok(!t.engine.trainingRules().some(r => r.key === "defence")); t.close();
+});
+test("+ and - rate the selected article from the keyboard, and the shortcut list says so", async () => {
+  const t = await mount(); const row = rowOf(t, "Navy orders"); row.click(); await wait(30); t.key("+"); await wait(120); assert.equal(row.dataset.rating, "1"); t.key("-"); await wait(120); assert.equal(row.dataset.rating, "-1"); t.key("-"); await wait(120); assert.equal(row.dataset.rating, "0", "the same key again takes it back");
+  t.key("?"); await wait(30); assert.ok([...t.$$(".overlay kbd")].some(k => k.textContent === "+ / -")); t.close();
+});
+test("a page you saved in Raindrop says so on its card, with your tags and note, and a close save is offered for the others", async () => {
+  const t = await mount({ prep: (w) => w.rd.st.bookmarks.push({ _id: 900, title: "Navy orders new frigates", excerpt: "frigate shipyard", note: "Read before the budget talk", tags: ["defence", "frigates"], link: "https://www.site1.example/1/?utm_source=x#t", lastUpdate: "2026-03-12T00:00:00Z" }) });
+  const row = rowOf(t, "Navy orders"); row.querySelector(".rtitle").click(); await wait(250); const lines = [...row.querySelectorAll(".tstrip .rdline")].map(x => x.textContent);
+  assert.ok(lines[0].startsWith("You saved this page in Raindrop"), lines[0]); assert.match(lines[0], /#defence #frigates/); assert.match(lines[0], /“Read before the budget talk”/);
+  assert.equal([...row.querySelectorAll(".tchip")][0].querySelector("svg") !== null, true, "your own Raindrop tags carry the bookmark mark");
+  const other = rowOf(t, "lemon cake"); other.querySelector(".rtitle").click(); await wait(250); assert.ok(!/You saved this page/.test(other.querySelector(".tstrip").textContent), "no false claim for an article you never saved"); t.close();
+});
+test("without a Raindrop token the strip says where tags come from instead of staying empty", async () => {
+  const t = await mount({ prep: (w) => { w.rd.st.bookmarks = []; } }); const row = rowOf(t, "lemon cake"); row.querySelector(".rtitle").click(); await wait(250);
+  const note = row.querySelector(".tstrip .trow .note"); assert.ok(note && note.textContent.length > 20, "an empty tag list is explained in words"); assert.ok(row.querySelector(".why summary").textContent === "Why it ranks here"); t.close();
+});
+test("Stats lists the rules without the thumbs' own bookkeeping, in plain words", async () => {
+  const t = await mount(); await t.engine.rateStory(1, 1); t.$$(".tab").find(b => b.textContent.includes("Stats")).click(); await wait(150);
+  const rules = [...t.$$(".trainrow .kw[data-v]")].map(x => x.textContent); assert.ok(rules.some(x => x.startsWith("tag: defence")), rules.join("|")); assert.ok(!rules.some(x => x.startsWith("story")), "no story entries shown"); t.close();
 });

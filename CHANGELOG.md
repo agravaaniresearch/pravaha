@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.0
+
+Training the ranking is now visible. Nothing in the storage or the event types changed.
+
+### New
+
+- Thumbs up and down on every row and every open card (keys `+` and `-`). A thumb sets a gentle rule (0.3 of a full click) on the article's top three tags and top three words, adds a pull on your interest profile when it is a thumbs up, and says what it trained, with Undo. A second press takes back exactly the rules it set and leaves any rule you set by hand.
+- The open card has a **Tags** row and a **Words** row of buttons. One click is more, two is less, three clears; the score updates at once. The old "Why it ranks here" panel keeps the score bars and "Train the whole source" (feed and author).
+- Raindrop perspective on the card: your own Raindrop tags for this exact page come first, a line says when and with what note you saved it, and up to two saved pages close in meaning are listed. The weekly digest says "saved in Raindrop" or "close to your Raindrop save", and has a **What you trained** section.
+- Fonts: only Apple's New York (reading) and SF Pro (interface), plus the system serif and sans. All open fonts and their licence files were removed, and the `@fontsource` dependencies with them.
+
+### Fixed
+
+- Keyword rules never matched plurals: the buttons trained the raw word while scoring compared stems. Rules now use stems.
+- A tag rule matched only the tags Miniflux sent. It now also matches your Raindrop tags of that page and the suggested tags.
+- Tag suggestion is about 26 times faster at 3,000 articles and 2,000 saves (7.4 s to 0.28 s, headless Node, synthetic), through an index from words to tags that gives the same results.
+- Found in real Firefox: a tag set by a thumb cleared on its first click instead of flipping to "less".
+- Found by the failure trial: taking back a thumb that this machine had not yet received wrote an event that left the other machine's rules orphaned. It now writes nothing.
+
+### Checked
+
+- 226 tests pass. Real Firefox 160: thumbs, strip, Raindrop lines, chip clicks and fonts pass against fake servers. `docs/FAILURE_RATES.md` has a new table: at 0, 5, 20 and 50 percent of requests failing, both machines hold the same training and clearing leaves no residue in 60 of 60 trials per row.
+- Not verified against a real Raindrop or Miniflux; see README.
+
 ## 0.6.1
 
 - Fixed: the Feeds tab showed the word "null" under the list of feeds. The list is now built without it, and a test checks for stray text.

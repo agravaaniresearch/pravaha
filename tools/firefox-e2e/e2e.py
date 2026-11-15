@@ -24,7 +24,7 @@ try:
     # ---- A: the established machine -------------------------------------------------
     A.open()
     A.send({"type": "saveSettings", "patch": {"device": "laptop", "miniflux": MF, "webdav": DAV, "raindrop": {"token": ""}, "weights": {"tag": 0.5, "echo": 0.2, "authority": 0.2, "freshness": 0.1}, "pollMinutes": 7}})
-    A.send({"type": "saveUi", "ui": {"theme": "oled", "palette": "moss", "readFont": "ubuntu", "uiFont": "atkinson", "density": "compact"}})
+    A.send({"type": "saveUi", "ui": {"theme": "oled", "palette": "moss", "readFont": "sfpro", "uiFont": "system", "density": "compact"}})
     A.send({"type": "syncNow"})
     A.send({"type": "dismiss", "id": 2}); A.send({"type": "train", "kind": "tag", "key": "frigate", "value": 1}); A.send({"type": "syncNow"})
     items = A.call("return await browser.storage.sync.get(null);")
@@ -54,11 +54,11 @@ try:
     sB = B.send({"type": "boot"})["settings"]
     check("B took the settings (weights, poll interval)", sB["pollMinutes"] == 7 and abs(sB["weights"]["tag"] - 0.5) < 0.2, f"{sB['pollMinutes']} {sB['weights']}")
     check("B kept its own machine name", sB["device"].startswith("browser-") and sB["device"] != "laptop", sB["device"])
-    check("B received the look", (sB.get("ui") or {}).get("theme") == "oled" and sB["ui"]["readFont"] == "ubuntu", str(sB.get("ui")))
+    check("B received the look", (sB.get("ui") or {}).get("theme") == "oled" and sB["ui"]["readFont"] == "sfpro", str(sB.get("ui")))
     # the reader page applied the look after a reload
     B.open(); time.sleep(2)
     theme = B.js("return document.documentElement.dataset.theme"); font = B.js("return document.documentElement.style.getPropertyValue('--read-font')")
-    check("B's reader shows the carried theme and font", theme == "oled" and "ubuntu" in font, f"{theme} {font}")
+    check("B's reader shows the carried theme and font", theme == "oled" and "sfpro" in font, f"{theme} {font}")
     # B syncs: articles from Miniflux and the reading history from WebDAV
     st = until(lambda: (lambda s: s if s.get("imported") else None)(B.send({"type": "status"})), 40)
     check("B imported A's reading history from the WebDAV storage", bool(st) and st["imported"]["events"] >= 2 and "laptop" in st["imported"]["devices"], str(st and st.get("imported")))

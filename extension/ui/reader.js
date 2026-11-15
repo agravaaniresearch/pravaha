@@ -6,7 +6,7 @@ import { anchorTree } from "../src/anchor.js";
 import { loadPrefs, normalisePrefs, savePrefs, applyPrefs, clamp, READ_FONTS, UI_FONTS, FONT_INFO, CONFIRM_MODES } from "./prefs.js";
 
 const $app = document.getElementById("app");
-const MUTATING = new Set(["markRead", "markUnread", "markScope", "save", "dismiss", "undismissAll", "syncNow", "subscribe", "searchServer", "card", "open", "feedUpdate", "feedDelete", "folderRename", "refreshScope"]);
+const MUTATING = new Set(["markRead", "markUnread", "markScope", "save", "dismiss", "undismissAll", "syncNow", "subscribe", "searchServer", "card", "open", "feedUpdate", "feedDelete", "folderRename", "refreshScope", "rate", "train"]);
 const send = async (m) => {
   if (MUTATING.has(m.type)) setTimeout(kickSync, 60);
   try { return await browser.runtime.sendMessage(m); } catch (e) { toast("The background page did not answer. Reload the extension if this keeps happening.", { kind: "error" }); throw e; }
@@ -20,7 +20,7 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 export const S = {
   tab: lsGet("pravaha.tab", "feed"), scope: "all", mode: "unread", ranked: false, q: "",
   settings: null, tree: [], status: null, rules: [], data: null, icons: {}, iconCount: 0, unread: 0,
-  rows: new Map(), rowGroup: new Map(), openCard: null, selId: null, keep: new Set(), content: {}, tags: {}, limits: {},
+  rows: new Map(), rowGroup: new Map(), openCard: null, selId: null, keep: new Set(), content: {}, tags: {}, trainer: {}, limits: {},
   collapsed: new Set(lsGet("pravaha.collapsed", [])), auto: new Set(), treeCollapsed: new Set(lsGet("pravaha.treeCollapsed", [])),
   newIds: new Set(), pop: null, help: false, toast: "", busy: false, stats: null, searchIn: "all", moved: null, dialog: null, syncFlash: 0,
   stab: "connections", ytab: "overview", feedsInfo: null, fq: "", fprob: false, fpage: 1, serverLines: null, serverBusy: false, draft: null, tests: {}, dirty: false
@@ -313,6 +313,48 @@ async function fetchFull(r) {
   fillCard(r);
 }
 async function train(type, key, value) { await send({ type: "train", kind: type, key, value }); S.rules = await send({ type: "rules" }); if (S.openCard) fillCard(S.rows.get(S.openCard)); toast(value > 0 ? "Noted. You will see more like this." : value < 0 ? "Noted. You will see less like this." : "Training rule removed."); }
+// ---------- training: a thumb on the article, clickable tags and words ----------
+const nextVal = (v) => { const s = Math.sign(v || 0); return s === 0 ? 1 : s > 0 ? -1 : 0; };
+const dshort = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "");
+const safeHref = (u) => (/^https?:\/\//i.test(u || "") ? u : null);
+function applyScore(r, res) { if (res && Number.isFinite(res.score)) { r.score = res.score; r.why = res.why; r.breakdown = res.breakdown; patchRow(r); } }
+async function rateRow(r, v) {
+  const next = r.rating === v ? 0 : v;
+  const res = await send({ type: "rate", id: r.id, value: next });
+  if (!res || !res.ok) return toast("That article is no longer stored here, so it cannot be trained.", { kind: "warn" });
+  r.rating = next; applyScore(r, res); S.rules = await send({ type: "rules" });
+  const el = rowElById(r.id, false); if (el) { el.dataset.rating = String(next); for (const b of el.querySelectorAll(".rate")) { const on = Number(b.dataset.v) === next; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); const ic = b.querySelector("svg"); if (ic) ic.replaceWith(icon(Number(b.dataset.v) > 0 ? "thumbup" : "thumbdown", b.classList.contains("btn") ? 15 : 17, on)); } }
+  if (S.openCard === r.id) loadTrainer(r);
+  const names = (res.labels || []).slice(0, 4).join(", ");
+  toast(next > 0 ? `Noted. More like this${names ? ": " + names : ""}.` : next < 0 ? `Noted. Less like this${names ? ": " + names : ""}.` : "Thumb taken back.", { kind: "success", action: next ? { label: "Undo", fn: () => rateRow(r, 0) } : undefined });
+}
+async function loadTrainer(r) { const t = await send({ type: "trainer", id: r.id }); if (!t) return; S.trainer[r.id] = t; if (S.openCard === r.id) fillStrip(r); }
+async function trainChip(r, type, c, label, v) {
+  const t = S.trainer[r.id]; if (!t) return; c.value = v;
+  fillStrip(r, v === 0 ? `Training for “${label}” cleared.` : v > 0 ? `More of “${label}” from now on. Click again for less, a third time to clear.` : `Less of “${label}” from now on. Click again to clear.`);
+  await send({ type: "train", kind: type, key: c.key, value: v }); S.rules = await send({ type: "rules" }); applyScore(r, await send({ type: "score", id: r.id }));
+}
+function chip(r, type, c, label) {
+  const v = c.value || 0; const state = v > 0 ? "more" : v < 0 ? "less" : "neutral"; const nv = nextVal(v);
+  const act = nv > 0 ? "see more of it" : nv < 0 ? "see less of it" : "clear it";
+  return h("button", { class: "tchip", "data-v": String(Math.sign(v)), "data-key": c.key, "aria-pressed": String(v !== 0), title: (c.source === "raindrop" ? "A tag from your own Raindrop save of this page. " : "") + `Click to ${act}.`, "aria-label": `${label}: ${state}. Click to ${act}.`, onclick: () => trainChip(r, type, c, label, nv) },
+    c.source === "raindrop" ? icon("bookmark", 12) : null, h("span", {}, label), v ? icon(v > 0 ? "thumbup" : "thumbdown", 13, true) : null);
+}
+function rdLine(b, lead) {
+  const href = safeHref(b.link);
+  return h("div", { class: "rdline" }, icon("bookmark", 14), h("span", {}, lead, href ? h("a", { href, target: "_blank", rel: "noopener noreferrer" }, b.title || b.link) : (b.title || "an untitled save"), b.at ? ` (${dshort(b.at)})` : "", b.tags && b.tags.length ? " · " + b.tags.map(x => "#" + x).join(" ") : "", b.note ? h("em", {}, ` “${b.note}”`) : null));
+}
+function stripKids(r, say) {
+  const t = S.trainer[r.id]; if (!t) return [h("span", { class: "note" }, "Looking for tags…")];
+  const kids = [h("div", { class: "trow" }, h("strong", {}, "Tags"), ...(t.tags.length ? t.tags.map(c => chip(r, "tag", c, c.tag)) : [h("span", { class: "note" }, t.raindrop.configured ? "No tag from your Raindrop saves is close enough to this article yet." : "Add a Raindrop token in Settings to get tags from your own saves.")]))];
+  if (t.words.length) kids.push(h("div", { class: "trow" }, h("strong", {}, "Words"), ...t.words.map(c => chip(r, "keyword", c, c.word))));
+  kids.push(h("p", { class: "note tnote", role: "status", "aria-live": "polite" }, say || "Click a tag or word to see more of it, again for less, a third time to clear. The thumbs above train on the top three tags and words together."));
+  const rd = t.raindrop || {};
+  if (rd.exact) kids.push(rdLine(rd.exact, "You saved this page in Raindrop: "));
+  for (const b of rd.related || []) kids.push(rdLine(b, "Close to something you saved: "));
+  return kids;
+}
+function fillStrip(r, say) { const host = rowElById(r.id, false)?.querySelector(".tstrip"); if (host) host.replaceChildren(...stripKids(r, say)); }
 async function syncNow() { S.busy = true; renderChrome(); try { S.status = await send({ type: "syncNow" }); } finally { S.busy = false; } if (isFeedTab()) await loadView(); else { S.stats = await send({ type: "stats" }); render(); } }
 
 // ---------- article card and dwell ----------
@@ -338,7 +380,7 @@ async function openCardFor(r) {
   if (!r.read) { r.read = true; S.keep.add(r.id); patchRow(r); }
   send({ type: "card", id: r.id }); refreshChrome(); startDwell(r);
   const el = rowElById(r.id); if (!el) return;
-  el.dataset.card = "false"; fillCard(r); requestAnimationFrame(() => requestAnimationFrame(() => { el.dataset.card = "true"; setTimeout(() => el.scrollIntoView({ block: "nearest", behavior: "smooth" }), 60); }));
+  el.dataset.card = "false"; fillCard(r); loadTrainer(r); requestAnimationFrame(() => requestAnimationFrame(() => { el.dataset.card = "true"; setTimeout(() => el.scrollIntoView({ block: "nearest", behavior: "smooth" }), 60); }));
   const have = S.content[r.id];
   if (!have || (!have.html && !have.error && !have.loading)) {
     S.content[r.id] = { loading: true }; fillCard(r);
@@ -360,11 +402,9 @@ function fillCard(r) {
     : h("div", { class: "prose" }, h("p", {}, r.summary || "Miniflux has no text for this article."));
   if (U.anchor && body.classList.contains("prose")) anchorTree(body, U.anchorLevel, document);
   const need = c.html != null && !c.full && r.words && r.words < 150;
-  const stems = [...new Set((r.title || "").toLowerCase().split(/[^\p{L}\p{N}]+/u))].filter(t => t.length > 4).slice(0, 4);
   const rule = (type, key) => (S.rules.find(x => x.type === type && x.key === String(key).toLowerCase()) || {}).value || 0;
   const tr = (name, type, key) => h("span", { class: "trainrow" }, h("span", {}, name), ...[["More", 1], ["Less", -1]].map(([l, v]) => h("button", { class: "kw", "data-v": String(Math.sign(rule(type, key)) === v ? v : 0), onclick: () => train(type, key, rule(type, key) === v ? 0 : v) }, l)));
   const bars = [["Tag match", bk.tagOverlap], ["Sites you read", bk.bookmarkEcho], ["Feed standing", bk.feedAuthority], ["Freshness", bk.freshness]].map(([n, v]) => h("div", { style: { "--grade": gradeOf(v).bg } }, h("span", {}, `${n}: ${pct(v)}`), h("div", { class: "gbar" }, h("i", { style: { width: pct(v) + "%" } }))));
-  const tags = S.tags[r.id] || [];
   const btn = (act, ic, label, key, fn, on) => h("button", { class: "btn small" + (on ? " on" : ""), "data-act": act, onclick: fn }, icon(ic, 15, act === "cardsave" && r.saved), h("span", {}, label), key ? h("kbd", {}, key) : null);
   host.replaceChildren(h("div", { class: "card" },
     h("h2", { class: "ctitle" }, r.title),
@@ -374,16 +414,17 @@ function fillCard(r) {
       h("button", { class: "btn small bionic" + (U.anchor ? " on" : ""), "data-act": "bionic", "aria-pressed": String(U.anchor), title: "Bionic reading: bold the start of each word (Shift+B)", onclick: toggleBionic }, h("b", {}, "B"), h("span", {}, "Bionic"), h("kbd", {}, "Shift+B")),
       btn("bg", "ext", "Open in background", "b", () => backgroundOpen(r)),
       btn("full", "coffee", c.full ? "Reload full article" : "Fetch full article", "w", () => fetchFull(r), c.loading),
+      ...[[1, "thumbup", "More like this", "+"], [-1, "thumbdown", "Less like this", "-"]].map(([v, ic, l, k]) => h("button", { class: "btn small rate" + (r.rating === v ? " on" : ""), "data-act": v > 0 ? "up" : "down", "data-v": String(v), "aria-pressed": String(r.rating === v), onclick: () => rateRow(r, v) }, icon(ic, 15, r.rating === v), h("span", {}, l), h("kbd", {}, k))),
       btn("cardsave", "star", r.saved ? "Saved" : "Save", "s", () => saveRow(r), r.saved),
       h("button", { class: "btn small", "data-act": "read", onclick: () => toggleRead(r) }, r.read ? "Mark unread" : "Mark read"),
       btn("dismiss", "x", "Dismiss", "x", () => dismissRow(r)), btn("close", "up2", "Close", "Esc", () => closeCard(r))),
+    h("div", { class: "tstrip" }, ...stripKids(r)),
     c.notice ? h("div", { class: "notice" }, c.notice) : null, c.error ? h("div", { class: "notice" }, c.error + " Showing the summary instead.") : null,
     need ? h("div", { class: "notice" }, "This feed only sends a short excerpt. Press w, or the coffee button, to fetch the whole article.") : null,
     body,
-    h("details", { class: "why", onclick: (e) => { if (e.target.tagName === "SUMMARY" && !S.tags[r.id]) { S.tags[r.id] = []; send({ type: "suggestTags", id: r.id }).then(t => { S.tags[r.id] = t || []; fillCard(r); const d = el.querySelector(".why"); if (d) d.open = true; }); } } },
-      h("summary", {}, "Why it ranks here and train the ranking"), h("p", { class: "note" }, `Ranks here because it is ${r.why}.`), h("div", { class: "bars" }, bars),
-      tags.length ? h("div", { class: "trainrow" }, h("span", {}, "Suggested tags:"), tags.map(t => h("span", { class: "kw" }, t.tag))) : null,
-      h("div", { class: "trainrow" }, h("strong", {}, "Train:"), tr(r.feedTitle, "feed", r.feedId), r.author ? tr(r.author, "author", r.author) : null), h("div", { class: "trainrow" }, stems.map(s => tr(s, "keyword", s))))));
+    h("details", { class: "why" },
+      h("summary", {}, "Why it ranks here"), h("p", { class: "note" }, `Ranks here because it is ${r.why}.`), h("div", { class: "bars" }, bars),
+      h("div", { class: "trainrow" }, h("strong", {}, "Train the whole source:"), tr(r.feedTitle, "feed", r.feedId), r.author ? tr(r.author, "author", r.author) : null))));
   if (g) updateGroupHead(g);
 }
 
@@ -405,7 +446,8 @@ function rowEl(r) {
     r.flag ? h("span", { class: "chip warn" }, "Serendipity") : null, r.words && r.words < 150 && !r.media ? h("span", { class: "chip", title: "This feed sends only an excerpt. Press w to fetch the full article." }, icon("coffee", 12), "Excerpt") : null,
     ...(r.tags || []).slice(0, 3).map(t => h("span", { class: "chip tag" }, "#" + t))].filter(Boolean);
   const act = (name, ic, title, fn, cls = "") => h("button", { class: "ibtn " + cls, "data-act": name, title, "aria-label": title, onclick: (e) => { e.stopPropagation(); fn(); } }, icon(ic, 17, name === "save" && r.saved));
-  return h("article", { class: "row", data: { id: r.id, read: String(r.read), saved: String(r.saved), sel: String(S.selId === r.id), card: "false", pending: String(!!r.pending) }, style: { "--grade": g.bg, "--gfg": g.fg }, onclick: () => selectRow(r.id) },
+  const rate = (v) => h("button", { class: "ibtn rate" + (r.rating === v ? " on" : ""), "data-act": v > 0 ? "up" : "down", "data-v": String(v), "aria-pressed": String(r.rating === v), title: v > 0 ? "More like this (+)" : "Less like this (-)", "aria-label": v > 0 ? "More like this" : "Less like this", onclick: (e) => { e.stopPropagation(); rateRow(r, v); } }, icon(v > 0 ? "thumbup" : "thumbdown", 17, r.rating === v));
+  return h("article", { class: "row", data: { id: r.id, read: String(r.read), saved: String(r.saved), sel: String(S.selId === r.id), card: "false", pending: String(!!r.pending), rating: String(r.rating || 0) }, style: { "--grade": g.bg, "--gfg": g.fg }, onclick: () => selectRow(r.id) },
     h("span", { class: "strip", "aria-hidden": "true" }),
     h("div", { class: "rmain" },
       h("div", { class: "rmeta" }, h("span", { class: "newdot", title: "Unread" }), r.pending ? h("span", { class: "pdot", title: "Sending to Miniflux" }) : null, metaLine),
@@ -413,7 +455,7 @@ function rowEl(r) {
       r.summary ? h("div", { class: "rsnip" }, hl(r.summary)) : null, chips.length ? h("div", { class: "chips" }, chips) : null),
     h("div", { class: "rside" }, U.thumbs && r.thumb ? h("img", { class: "thumb", src: r.thumb, alt: "", loading: "lazy", referrerpolicy: "no-referrer", onerror: (e) => e.target.remove() }) : null,
       h("div", { class: "grade", title: `Relevance ${pct(g.d)} of 100 (raw ${pct(r.score)}; ${r.why})` }, h("span", { class: "score" }, String(pct(g.d))), h("div", { class: "gbar" }, h("i", { style: { width: pct(g.d) + "%" } })))),
-    h("div", { class: "acts" }, act("save", "star", r.saved ? "Remove from saved (s)" : "Save (s)", () => saveRow(r), "save"), act("bg", "ext", "Open in a background tab (b)", () => backgroundOpen(r)),
+    h("div", { class: "acts" }, rate(1), rate(-1), act("save", "star", r.saved ? "Remove from saved (s)" : "Save (s)", () => saveRow(r), "save"), act("bg", "ext", "Open in a background tab (b)", () => backgroundOpen(r)),
       act("full", "coffee", "Fetch the full article (w)", () => fetchFull(r)), act("dismiss", "x", "Dismiss (x)", () => dismissRow(r)), act("card", "down", "Read here (o)", () => openCardFor(r))),
     h("div", { class: "cardwrap" }, h("div", { class: "cardin" })));
 }
@@ -829,7 +871,7 @@ function renderPop() {
   anchorSamples();
 }
 document.addEventListener("click", (e) => { if (S.pop && !e.target.closest(".pop") && !e.target.closest(".aa")) { S.pop = null; renderPop(); renderChrome(); } });
-const SHORTCUTS = [["j / k", "Next or previous article (opens it if a card is open)"], ["o or Enter", "Read here as a card"], ["b", "Open in a background tab, counted as interest"], ["w", "Fetch the full article (the coffee button)"], ["s", "Save or unsave"], ["x", "Dismiss"], ["m", "Mark read or unread"], ["Shift+A", "Mark the section read and fold it (works without a selection)"], ["Shift+M", "Mark everything in this view read"], ["Shift+B", "Bionic reading on or off"], ["a", "Add a feed from a website"], ["c", "Fold or unfold the section"], ["Shift+C", "Fold or unfold every section"], ["u", "Switch between Unread and All"], ["r", "Sync now"], ["/", "Search"], ["Esc", "Close the card or this panel"], ["?", "Show this list"]];
+const SHORTCUTS = [["j / k", "Next or previous article (opens it if a card is open)"], ["o or Enter", "Read here as a card"], ["b", "Open in a background tab, counted as interest"], ["w", "Fetch the full article (the coffee button)"], ["s", "Save or unsave"], ["+ / -", "Thumbs up or down: more or less like this article"], ["x", "Dismiss"], ["m", "Mark read or unread"], ["Shift+A", "Mark the section read and fold it (works without a selection)"], ["Shift+M", "Mark everything in this view read"], ["Shift+B", "Bionic reading on or off"], ["a", "Add a feed from a website"], ["c", "Fold or unfold the section"], ["Shift+C", "Fold or unfold every section"], ["u", "Switch between Unread and All"], ["r", "Sync now"], ["/", "Search"], ["Esc", "Close the card or this panel"], ["?", "Show this list"]];
 function renderOverlay() {
   $app.querySelector(".overlay")?.remove(); if (!S.help) return;
   $app.append(h("div", { class: "overlay", onclick: () => { S.help = false; renderOverlay(); } }, h("div", { class: "dialog", role: "dialog", "aria-label": "Keyboard shortcuts", onclick: (e) => e.stopPropagation() }, h("h2", {}, "Keyboard shortcuts"), h("div", { class: "keys" }, SHORTCUTS.map(([k, d]) => h("div", {}, h("span", {}, d), h("kbd", {}, k)))), h("p", { class: "note", style: { marginTop: "12px" } }, "Shortcuts pause while you type in a box."))));
@@ -857,7 +899,7 @@ function statsMain() {
   const tiles = [["Read in the reader", s.cards], ["Opened in tabs", s.opens], ["Saved", s.saves], ["Dismissed", s.dismisses], ["Minutes reading", s.dwellMinutes]].map(([n, v]) => h("div", { class: "stat" }, h("b", {}, String(v)), h("span", {}, n + ", last 30 days")));
   const maxB = Math.max(1, ...s.bands.map(b => b.n)); const maxO = Math.max(1, ...s.bands.map(b => b.opened));
   const col = (b) => gradeOf((b.lo + b.hi) / 2).bg;
-  const rules = S.rules.length ? S.rules.map(r => h("div", { class: "trainrow" }, h("span", { class: "kw", "data-v": String(Math.sign(r.value)) }, `${r.type}: ${r.key}`), h("span", {}, r.value > 0 ? "more" : "less"), h("button", { class: "kw", onclick: async () => { await train(r.type, r.key, 0); go("stats"); } }, "Remove"))) : [h("p", { class: "note" }, "No training rules yet. Open an article and use More or Less under its ranking panel.")];
+  const rules = S.rules.length ? S.rules.map(r => h("div", { class: "trainrow" }, h("span", { class: "kw", "data-v": String(Math.sign(r.value)) }, `${r.type}: ${r.key}`), h("span", {}, r.value > 0 ? "more" : "less"), h("button", { class: "kw", onclick: async () => { await train(r.type, r.key, 0); go("stats"); } }, "Remove"))) : [h("p", { class: "note" }, "No training yet. Use the thumbs on an article, or click the tags and words under its title.")];
   const folders = s.savesByFolder.length ? s.savesByFolder.map(([n, v]) => hbar(n, v, Math.max(1, ...s.savesByFolder.map(x => x[1])), "var(--accent)")) : [h("p", { class: "note" }, "Nothing saved in the last 30 days.")];
   return [h("div", { class: "page" }, h("h1", {}, "Reading stats"), h("div", { class: "tiles" }, tiles),
     h("div", { class: "cols" },
@@ -1280,6 +1322,7 @@ document.addEventListener("keydown", (e) => {
     switch (e.key) {
       case "j": selectOffset(1, cardOpen); return true; case "k": selectOffset(-1, cardOpen); return true;
       case "o": case "Enter": if (r) openCardFor(r); return true; case "b": if (r) backgroundOpen(r); return true; case "w": if (r) fetchFull(r); return true;
+      case "+": case "=": if (r) rateRow(r, 1); return true; case "-": if (r) rateRow(r, -1); return true;
       case "s": if (r) saveRow(r); return true; case "m": if (r) toggleRead(r); return true;
       case "x": if (r) { const els = rowEls(); const i = els.findIndex(el => Number(el.dataset.id) === r.id); const next = els[i + 1] || els[i - 1]; dismissRow(r); if (next) selectRow(Number(next.dataset.id)); } return true;
       case "c": { const g = r && groupOf(r.id); if (g) toggleGroup(g); return true; }

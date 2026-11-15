@@ -1,6 +1,6 @@
 // The engine: owns state, talks to Miniflux, Raindrop and WebDAV, scores items, records events.
 // Nothing here touches browser globals directly; the background page injects everything.
-import { tokenize, domainOf, firstParagraph, wordCount } from "./text.js";
+import { tokenize, stem, domainOf, firstParagraph, wordCount, canonicalUrl } from "./text.js";
 import { Corpus, cosine, blend, mean, prune, topTerms } from "./vector.js";
 import { scoreItem, DEFAULT_WEIGHTS, normaliseWeights, whyRanked, authorityOf } from "./scoring.js";
 import { EventLog, Clock, derive, parseTs } from "./eventlog.js";
@@ -15,6 +15,7 @@ import { buildDigest, isoWeek } from "./digest.js";
 import { indexEntry, runSearch, parseQuery } from "./search.js";
 import { loadServer, collector, dueForCheck, noteVersion, setCap, notFound, badFeed, badEntry, badIds, badVersion, ackChange, serverLamp, MIN_VERSION } from "./server.js";
 
+export const STORY_WEIGHT = 0.3;
 export const DEFAULT_SETTINGS = {
   device: "", miniflux: { url: "https://reader.miniflux.app", token: "" },
   webdav: { url: "https://myfiles.fastmail.com", user: "", pass: "", root: "pravaha" },
@@ -114,9 +115,10 @@ export class Engine {
     const weights = bms.map(b => Math.pow(0.5, Math.max(0, now - (b.at || now)) / (365 * DAY)));
     let centroid = prune(mean(vecs, weights), 500);
     const d = this._derive();
-    for (const p of d.pulls) centroid = blend(centroid, corpus.vector(p.terms), p.kind === "save" ? 0.12 : p.kind === "card" ? 0.02 : 0.05);
+    for (const p of d.pulls) centroid = blend(centroid, corpus.vector(p.terms), p.kind === "save" ? 0.12 : p.kind === "up" ? 0.08 : p.kind === "card" ? 0.02 : 0.05);
     const echo = this._echoMerged(corpus);
-    this._model = { corpus, centroid, echo: echo.vec, domainVisits: echo.domainVisits, profiles: buildTagProfiles(bms, corpus) };
+    const bmByUrl = new Map(); bms.forEach((b, i) => { const c = canonicalUrl(b.link); if (c && !bmByUrl.has(c)) bmByUrl.set(c, i); });
+    this._model = { corpus, centroid, echo: echo.vec, domainVisits: echo.domainVisits, profiles: buildTagProfiles(bms, corpus), bms, bmVecs: vecs, bmByUrl };
     return this._model;
   }
   _echoMerged(corpus) {
@@ -135,12 +137,22 @@ export class Engine {
   _scoreCtx() {
     const m = this._buildModel(), d = this._derive();
     return { weights: normaliseWeights(this.settings.weights), centroid: m.centroid, echo: m.echo, domainVisits: m.domainVisits, authorityDelta: d.authorityDelta,
-      training: d.training, now: this.now(), sessionFeeds: this.sessionFeeds, novelty: this.settings.novelty, enrichment: this.enrichment, cosine };
+      training: d.training, story: d.story, tagRules: d.training.some(r => r.type === "tag"), now: this.now(), sessionFeeds: this.sessionFeeds, novelty: this.settings.novelty, enrichment: this.enrichment, cosine };
   }
   scoreOne(it, ctx = this._scoreCtx()) {
     const v = this._itemVec(it);
-    return scoreItem({ id: it.id, feedId: it.feedId, vec: v.vec, stems: v.stems, domain: it.domain, publishedAt: it.publishedAt, author: it.author, tags: it.tags }, ctx);
+    return scoreItem({ id: it.id, feedId: it.feedId, vec: v.vec, stems: v.stems, domain: it.domain, publishedAt: it.publishedAt, author: it.author, tags: ctx.tagRules ? this._itemTags(it) : it.tags }, ctx);
   }
+  // The tags a tag rule can match: the ones the feed sent, the tags of your own Raindrop save of this very page, and the tags suggested from your Raindrop vocabulary.
+  // Worked out only while at least one tag rule exists, and kept per article until the next refresh.
+  _itemTags(it) {
+    const v = this._itemVec(it); if (v.tags) return v.tags;
+    const m = this._buildModel(); const set = new Set((it.tags || []).map(t => String(t).toLowerCase()));
+    const own = this._savedCopy(it, m); if (own) for (const t of own.tags || []) set.add(String(t).toLowerCase());
+    for (const t of suggestTags(v.vec, v.stems, m.profiles)) set.add(t.tag.toLowerCase());
+    v.tags = [...set]; return v.tags;
+  }
+  _savedCopy(it, m = this._buildModel()) { const c = canonicalUrl(it.url); const i = c ? m.bmByUrl.get(c) : undefined; return i === undefined ? null : m.bms[i]; }
 
   // ---------- Miniflux ----------
   _norm(e, prev = {}) {
@@ -332,10 +344,10 @@ export class Engine {
   // ---------- Raindrop and echo ----------
   async refreshRaindrop(force = false) {
     if (!this.rd) return;
-    if (!force && this.raindropCache && this.now() - this.raindropCache.at < DAY) return;
+    if (!force && this.raindropCache && this.raindropCache.v === 2 && this.now() - this.raindropCache.at < DAY) return;
     try {
       const bms = await this.rd.bookmarks();
-      this.raindropCache = { at: this.now(), bookmarks: bms.map(({ title, excerpt, note, tags, domain, at }) => ({ title, excerpt, note, tags, domain, at })) };
+      this.raindropCache = { at: this.now(), v: 2, bookmarks: bms.map(({ title, excerpt, note, tags, domain, at, link }) => ({ title, excerpt, note, tags, domain, at, link })) };
       this._netOk("raindrop"); this._invalidate();
     } catch (e) { this._netErr("raindrop", e); }
     await this.persist(["raindropCache", "net"]);
@@ -458,7 +470,7 @@ export class Engine {
   _rowOf(it, ctx, dead, pend) {
     const s = this.scoreOne(it, ctx);
     return { id: it.id, feedId: it.feedId, feedTitle: it.feedTitle, title: it.title, summary: it.summary, url: it.url, publishedAt: it.publishedAt, read: it.status === "read", saved: it.starred,
-      score: s.score, why: whyRanked(s.breakdown), breakdown: roundBreakdown(s.breakdown), flag: s.flag, author: it.author, readingTime: it.readingTime, dead: dead.has(it.feedId), domain: it.domain, tags: it.tags || [], words: it.words || 0, thumb: it.thumb || null, media: it.media || null, comments: it.comments || null, newish: it.publishedAt > this.now() - 3 * 3600000, pending: !!(pend && pend.has(it.id)) };
+      score: s.score, why: whyRanked(s.breakdown), breakdown: roundBreakdown(s.breakdown), flag: s.flag, author: it.author, readingTime: it.readingTime, dead: dead.has(it.feedId), domain: it.domain, tags: it.tags || [], words: it.words || 0, thumb: it.thumb || null, media: it.media || null, comments: it.comments || null, newish: it.publishedAt > this.now() - 3 * 3600000, pending: !!(pend && pend.has(it.id)), rating: (ctx.story[String(it.id)] || {}).value || 0 };
   }
   getView({ scope = "all", mode = "unread", ranked = false, q = "", keep = [] } = {}, tree = null) {
     const d = this._derive(); const ctx = this._scoreCtx(); const keepSet = new Set(keep); const meta = this._feedMeta();
@@ -838,8 +850,68 @@ export class Engine {
     if (back.length) this._queue({ op: "status", ids: back, status: "unread" });
     await this.persist(); this._notify(); await this.flushOps(); this._notify();
   }
-  async train(type, key, value) { this.log.append("train", { payload: { type, key: String(key).toLowerCase(), value } }); this._derived = null; this._model = null; await this.persist(["events"]); this._notify(); }
+  async train(type, key, value) { return this.trainMany([{ type, key, value }]); }
+  // Several rules at once, written as separate events so that older copies of Pravaha still understand every one of them.
+  // Training changes the score only, so the model stays; a thumbs up also nudges the interest profile, which does rebuild it.
+  async trainMany(list) {
+    let pull = false;
+    for (const r of list || []) {
+      if (!r || typeof r.type !== "string" || !Number.isFinite(r.value) || Math.abs(r.value) > 3 || r.key === undefined || r.key === null || r.key === "") continue;
+      const payload = { type: r.type, key: r.type === "story" ? String(r.key) : String(r.key).toLowerCase(), value: r.value };
+      if (r.type === "story") { pull = true; if (Array.isArray(r.keys)) payload.keys = r.keys; if (Array.isArray(r.terms)) payload.terms = r.terms; }
+      this.log.append("train", { payload });
+    }
+    this._derived = null; if (pull) this._model = null;
+    await this.persist(["events"]); this._notify();
+  }
   trainingRules() { return this._derive().training; }
+
+  // ---------- training an article ----------
+  // Everything the reader needs to train one article: its tags (yours from Raindrop first), the words that carry it, and the Raindrop context.
+  trainerFor(id) {
+    const it = this.cache.items[id]; if (!it) return null;
+    const d = this._derive(), m = this._buildModel(), v = this._itemVec(it);
+    const val = (type, key) => { const r = d.training.find(x => x.type === type && x.key === String(key).toLowerCase()); return r ? r.value : 0; };
+    const own = this._savedCopy(it, m); const tags = []; const seen = new Set();
+    const addTag = (tag, source) => { const k = String(tag).toLowerCase(); if (!k || seen.has(k) || tags.length >= 6) return; seen.add(k); tags.push({ tag: String(tag), key: k, source, value: val("tag", k) }); };
+    for (const t of (own && own.tags) || []) addTag(t, "raindrop");
+    for (const t of suggestTags(v.vec, v.stems, m.profiles, 5)) addTag(t.tag, "suggested");
+    for (const t of it.tags || []) addTag(t, "feed");
+    const words = []; const have = new Set(v.stems); const wseen = new Set();
+    for (const raw of String(it.title || "").split(/[^\p{L}\p{N}]+/u)) {
+      const st = raw.length > 3 ? tokenize(raw)[0] : undefined;
+      if (!st || !have.has(st) || wseen.has(st) || words.length >= 5) continue; wseen.add(st); words.push({ word: raw.toLowerCase(), key: st, value: val("keyword", st) });
+    }
+    const rel = [];
+    if (m.bms.length) for (let i = 0; i < m.bms.length; i++) { const b = m.bms[i]; if (b === own) continue; const c = cosine(v.vec, m.bmVecs[i]); if (c >= 0.22) rel.push({ c, b }); }
+    rel.sort((a, b) => b.c - a.c);
+    const pick = (b) => ({ title: b.title, tags: b.tags || [], note: String(b.note || "").slice(0, 240), link: b.link || "", domain: b.domain || "", at: b.at || 0 });
+    return { id, story: (d.story[String(id)] || {}).value || 0, tags, words,
+      feed: { key: String(it.feedId), title: it.feedTitle, value: val("feed", it.feedId) }, author: it.author ? { key: String(it.author).toLowerCase(), name: it.author, value: val("author", it.author) } : null,
+      raindrop: { configured: !!this.rd, count: m.bms.length, exact: own ? pick(own) : null, related: rel.slice(0, 2).map(x => ({ ...pick(x.b), sim: Math.round(x.c * 100) / 100 })) } };
+  }
+  // A thumb is a gentler nudge than clicking one tag yourself: each of its rules carries 0.3 of a full click, so six rules together stay under the scorer's cap
+  // of 0.2 and a tag clicked afterwards still moves the score.
+  // The thumb: up, down, or 0 to take it back. It sets a rule on the article's top three tags and top three words, and remembers which, so a second press undoes exactly that.
+  scoreRow(id) { const it = this.cache.items[id]; if (!it) return null; const s = this.scoreOne(it); return { score: s.score, why: whyRanked(s.breakdown), breakdown: roundBreakdown(s.breakdown) }; }
+  async rateStory(id, value) {
+    const it = this.cache.items[id]; if (!it || ![1, -1, 0].includes(value)) return { ok: false };
+    const d = this._derive(); const prev = d.story[String(id)]; const list = []; let keys = [];
+    if (value === 0 && !prev) return { ok: true, value: 0, labels: [], ...this.scoreRow(id) }; // nothing to take back: writing a 0 would only hide another machine's thumb that has not arrived yet
+    const cur = (k) => { const r = d.training.find(x => x.type === k.type && x.key === k.key); return r ? r.value : 0; }; const w = value * STORY_WEIGHT;
+    if (value !== 0) {
+      const t = this.trainerFor(id);
+      keys = [...t.tags.filter(x => x.source !== "feed").slice(0, 3).map(x => ({ type: "tag", key: x.key })), ...t.words.slice(0, 3).map(x => ({ type: "keyword", key: x.key }))];
+      if (!keys.length) keys = t.tags.slice(0, 3).map(x => ({ type: "tag", key: x.key }));
+    }
+    if (prev) for (const k of prev.keys) if (cur(k) === prev.value * STORY_WEIGHT && !keys.some(x => x.type === k.type && x.key === k.key)) list.push({ type: k.type, key: k.key, value: 0 });
+    for (const k of keys) list.push({ ...k, value: w });
+    list.push(value === 0 ? { type: "story", key: String(id), value: 0 } : { type: "story", key: String(id), value, keys, terms: value > 0 ? this._itemVec(it).stems : undefined });
+    await this.trainMany(list);
+    const t2 = value ? this.trainerFor(id) : null;
+    const labels = keys.map(k => k.type === "tag" ? "#" + k.key : ((t2 && t2.words.find(w => w.key === k.key)) || {}).word || k.key);
+    return { ok: true, value, labels, ...this.scoreRow(id) };
+  }
 
   // ---------- stats and digest ----------
   stats() {
@@ -861,12 +933,14 @@ export class Engine {
     if (!this.dav) throw new PlainError("The digest needs the WebDAV storage to be set up first.", "not-configured");
     const now = this.now(), d = this._derive(); const sc = this._unreadScored();
     const week = isoWeek(now);
-    const top = sc.filter(x => now - x.it.publishedAt < 7 * DAY).sort((a, b) => b.s.score - a.s.score).slice(0, 15).map(x => ({ ...x.it, score: x.s.score }));
+    const top = sc.filter(x => now - x.it.publishedAt < 7 * DAY).sort((a, b) => b.s.score - a.s.score).slice(0, 15).map(x => { const rd = (this.trainerFor(x.it.id) || {}).raindrop || {}; const because = rd.exact ? "saved in Raindrop" : rd.related && rd.related[0] ? `close to your Raindrop save “${rd.related[0].title}”` : ""; return { ...x.it, score: x.s.score, because }; });
     const saved = Object.values(this.cache.items).filter(i => i.starred && now - i.publishedAt < 14 * DAY).map(i => ({ ...i, tags: this.suggestTagsFor(i.id).map(t => t.tag) }));
     const meta = this._feedMeta();
     const authority = Object.entries(d.authorityDelta).map(([id, v]) => ({ title: (meta[id] && meta[id].title) || id, value: authorityOf(v) })).sort((a, b) => b.value - a.value);
     const terms = topTerms(this._buildModel().centroid, 15);
-    const md = buildDigest({ now, week, top, saved, authority, centroidTerms: terms, previousTerms: this.cache.lastDigestTerms });
+    const label = (r) => r.type === "tag" ? "#" + r.key.replace(/\s+/g, "-") : r.type === "feed" ? ((meta[r.key] && meta[r.key].title) || "a feed") : r.key;
+    const trained = { more: d.training.filter(r => r.value > 0).map(label).slice(0, 12), less: d.training.filter(r => r.value < 0).map(label).slice(0, 12) };
+    const md = buildDigest({ now, week, top, saved, authority, centroidTerms: terms, previousTerms: this.cache.lastDigestTerms, trained });
     await this.dav.mkdirs(`${this.settings.webdav.root}/digests`);
     await this.dav.put(`${this.settings.webdav.root}/digests/${week}.md`, md);
     this.cache.lastDigestAt = now; this.cache.lastDigestTerms = terms; await this.persist(["cache"]);

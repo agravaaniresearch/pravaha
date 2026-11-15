@@ -33,3 +33,14 @@ export function firstParagraph(html, max = 320) {
   const plain = String(html || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
   return plain.length > max ? plain.slice(0, max - 1).trimEnd() + "…" : plain;
 }
+
+// One address for one page: no scheme, no www, no fragment, no tracking parameters, no trailing slash. Used to recognise an article you saved in Raindrop.
+const TRACKING = /^(utm_|fbclid$|gclid$|mc_|ref$|ref_src$|igshid$|yclid$|_hsenc$|_hsmi$)/;
+export function canonicalUrl(u) {
+  try {
+    const x = new URL(String(u)); if (!/^https?:$/.test(x.protocol)) return "";
+    const keep = [...x.searchParams.entries()].filter(([k]) => !TRACKING.test(k.toLowerCase())).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const q = keep.length ? "?" + keep.map(([k, v]) => `${k}=${v}`).join("&") : "";
+    return x.hostname.toLowerCase().replace(/^www\./, "") + (x.pathname.replace(/\/+$/, "") || "") + q;
+  } catch { return ""; }
+}

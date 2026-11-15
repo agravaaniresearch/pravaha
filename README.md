@@ -22,7 +22,7 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Manages feeds without leaving the reader (0.6.0).** Settings, Feeds lists every feed with its health, a filter and "only feeds with trouble". Rename, move to a folder (or a new one), disable or enable, refresh now and delete are there, and also in the right-click menu on a feed. Folders can be renamed and refreshed from their menu, and "Refresh every feed" is on the All articles menu. Every change is made in Miniflux first, then shown here. Delete needs the exact name typed and offers Disable instead.
 - **Watches the Miniflux server for silent changes (0.6.0).** The Sync page has a Miniflux server tile with the version, a light, and a read-only "Check server" button. Every refresh checks that Miniflux's answers have the fields Pravaha relies on and leaves out anything that does not, so a server update cannot quietly write wrong data. A changed version turns the light amber until you press "Got it", and the toolbar button wears a small "!" in amber or red.
 - **Refreshes lightly (0.6.0).** The two-minute poll asks Miniflux which articles are unread (numbers only) and downloads just the ones it lacks, instead of every unread article. If the server cannot do that, Pravaha falls back to the full download by itself and says so on the Sync page.
-- **Has an OLED black theme** besides light and dark, eleven reading fonts and five interface fonts, chosen from labelled cards with a live sample (all open fonts bundled; Apple's SF Pro and New York can be added for your own build, see below), and reading controls for size, line gap and width.
+- **Has an OLED black theme** besides light and dark, two typefaces (Apple's New York for reading and SF Pro for the interface, which you add to your own build, see below) with the system serif and sans as fallbacks, chosen from labelled cards with a live sample, and reading controls for size, line gap and width.
 - **Shows relevance as colour.** There are no Good, Great or Best tiers. Each row has a bar and a chip that darken as the score rises. Three palettes are included: ember, saffron and moss.
 - **Learns from what you do.** Opening in a tab, reading a card, reading for more than 15 seconds, saving and dismissing all move a feed's standing. They fade with a 14 day half life. Opens and saves also pull your interest profile toward the article.
 - **Trains like NewsBlur.** Open an article's details and choose More or Less for the feed, the author or a keyword.
@@ -31,6 +31,7 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Tells you the state in plain words.** Settings and Sync are folder-tabbed pages. Sync is a dashboard with a status ring, a tile per service and per machine, and small graphs; every tab carries a status lamp.
 - **Moves your whole setup between machines.** Keys, settings, folder order and look travel through Firefox Sync by themselves; a new machine shows three set-up routes (Firefox Sync, a settings file, typing the keys) and then imports articles and reading history with a progress message. The settings file seals keys with a passphrase. Two installs with the same machine name are stopped before they can mix history.
 - **Never says "In sync" falsely.** With nothing connected the pill says "Not set up"; with only Miniflux it says "Miniflux in sync". Background polls are quiet and do not redraw the page.
+- **Lets you train the ranking in plain sight (0.7.0).** Every row and every open card has thumbs up and down (keys `+` and `-`). Under the title of an open card the tags and the title's key words are buttons: one click for more of it, a second for less, a third to clear. The card also says whether you already saved the page in Raindrop and shows up to two saves close to it. Taking a thumb back removes exactly the rules it set.
 - **Writes a weekly digest** to the WebDAV folder as Markdown with Dataview front matter, for Obsidian.
 - **Accepts outside scores.** A Grok automation, or anything else, can write `enrich/results.json`. Pravaha blends 20 percent of that score with 80 percent of its own.
 
@@ -55,7 +56,7 @@ New in 0.3.0:
 | ![Syncing with Miniflux](docs/screenshots/12-syncing-with-miniflux.png)<br>**Syncing.** The top-right pill and a bar on each section show changes still going to Miniflux. | ![Toast with undo](docs/screenshots/13-toast-with-undo.png)<br>**Toasts.** Every bulk action reports whether Miniflux confirmed it, with Undo. |
 | ![Reorder folders](docs/screenshots/14-reorder-folders.png)<br>**Reorder.** Move folders and feeds up and down. | ![Add a feed](docs/screenshots/15-add-feed.png)<br>**Add a feed.** Paste a site, pick a discovered feed and a folder. |
 | ![Bionic button](docs/screenshots/16-bionic-button-and-fonts.png)<br>**Bionic button** in the top bar and on the card. | ![Fonts and confirm settings](docs/screenshots/17-settings-fonts-and-confirm.png)<br>**Fonts and Marking read** settings. |
-| ![Font picker](docs/screenshots/18-font-picker.png)<br>**Font picker (0.3.1).** Serif and sans groups, each card in its own font. SF Pro and New York show "Not in this build" until you build them locally. | |
+| ![Font picker](docs/screenshots/18-font-picker.png)<br>**Font picker.** From 0.7.0 only New York, SF Pro and the system fonts. SF Pro and New York show "Not in this build" until you build them locally. | ![Training strip](docs/screenshots/31-training-strip.png)<br>**Training strip (0.7.0).** Tags and words are buttons; the Raindrop lines show your own save and close ones. Rendered here without the Apple fonts. |
 
 New in 0.4.0 (these three were taken in real Firefox 160, with synthetic data):
 
@@ -136,6 +137,30 @@ Folder tree now:
 
 Reading it: with nothing new the second refresh is a light one that asks for numbers only; a single new article adds one request. The feed changes are made in Miniflux and shown in the folder tree. Renaming "Defence" also renamed the folder inside it, because folders are Miniflux categories whose titles are paths. A delete with the wrong name is refused. The check reads only; the last line is there because trying a folder refresh would make Miniflux fetch real feeds. The code, the servers and every number above are synthetic and illustrative; they say how the program behaves, not how your Miniflux will.
 
+New in 0.7.0, the same invented library, continued. A thumb sets a gentle rule (0.3 of a full click) on the article's top three tags and top three words; the click on a tag sets a full one:
+
+```
+The card for “Shipyard signs frigate contract”:
+  tags:  defence (your Raindrop tag), to-read (your Raindrop tag), shipbuilding
+  words: shipyard, signs, frigate, contract
+  Raindrop: you saved this page (#defence #to-read) with the note “Compare with last year's tender”
+  Close to something you saved: nothing close enough (a save is offered only above a similarity of 0.22)
+
+Thumbs up: score 44 -> 62; trained #defence, #to-read, #shipbuilding, shipyard, signs, frigate
+Click the “to-read” tag so it is “less”: score 62 -> 53
+Take the thumb back: score 35; the hand-set “to-read: less” rule is kept: feed:1:1, tag:to-read:-1
+The desktop, which never saw the clicks, holds the same rules: feed:1:1, keyword:hypofractionat:-0.3, keyword:radiotherapy:-0.3, keyword:trial:-0.3, tag:oncology:-0.3, tag:to-read:-1
+
+The digest now carries:
+  - 35 · [Shipyard signs frigate contract](https://site1.example/1) · Harbour Weekly · saved in Raindrop
+  ## What you trained
+  - More of: Harbour Weekly
+  - Less of: #to-read, #oncology, trial, hypofractionat, radiotherapy
+```
+
+Reading it: the thumb moved the score from 44 to 62, and one click on the “to-read” tag took it back down to 53. Taking the thumb back removed only the rules the thumb had set, so the hand-set “to-read: less” survived. The desktop holds the same rules through the shared history log. “Close to something you saved” says nothing because no invented save was similar enough to pass the 0.22 threshold, which was set by eye on synthetic data.
+
+
 ## Getting started
 
 1. **Prerequisites.** Firefox on desktop, a Miniflux server (hosted or self-hosted) with an API key from Miniflux, Settings, API Keys, and optionally a Fastmail app password with Files access (for syncing two machines) and a Raindrop test token (for tag suggestions and saving).
@@ -168,8 +193,8 @@ Reading it: with nothing new the second refresh is a light one that asks for num
 - **Read on scroll** is a toolbar toggle. It marks an article read only after you have seen it and it leaves through the top of the screen, and it is neutral for ranking.
 - **Mark section read** marks every unread article of that feed read in Miniflux, including ones not shown because the list is long, and folds the section away. Undo is on the message that follows.
 - **Themes:** light, dark and OLED black, plus three relevance palettes (ember, saffron, moss).
-- **Reading type:** serifs (Newsreader, Literata, New York, Source Serif, Lora, Crimson Pro, Merriweather, the system serif) and sans fonts (Atkinson Hyperlegible, SF Pro, Ubuntu) for articles; IBM Plex Sans, Source Sans, Atkinson Hyperlegible, SF Pro, Ubuntu or the system font for the interface. Settings shows each as a card set in its own font, with a one-line note on what it suits. All the open fonts are bundled, so nothing loads from the web.
-- **Apple fonts (SF Pro, New York), personal builds only:** Apple's fonts are not in this repository and must not be added to it. Run `pip install fonttools brotli`, then `python3 tools/apple-fonts.py`. It fetches the community SFWindows collection, cuts small Latin files into `extension/ui/fonts/apple/` (git-ignored) and the next build includes them. Without them the two cards show "Not in this build" and cannot be chosen. Never share an extension built this way. Size, line gap, width and Bionic strength are in the Aa menu and in Settings.
+- **Reading type:** New York (serif), SF Pro (sans) or the system serif, shown as cards set in their own font. Nothing loads from the web.
+- **Apple fonts (SF Pro, New York), personal builds only:** Apple's fonts are not in this repository and must not be added to it. Run `pip install fonttools brotli`, then `python3 tools/apple-fonts.py`. It fetches the community SFWindows collection, cuts small Latin files into `extension/ui/fonts/apple/` (git-ignored) and the next build includes them. Without them the two cards show "Not in this build" and cannot be chosen, and the reader uses your system fonts. These two are the only fonts Pravaha bundles; the open fonts of earlier versions were removed to keep the file small. Never share an extension built this way. Size, line gap, width and Bionic strength are in the Aa menu and in Settings.
 
 ### Searching
 
@@ -201,7 +226,7 @@ Right-click a page or link and choose "Subscribe with Pravaha". Optionally, turn
 
 ## How ranking works
 
-Each unread article gets a score from 0 to 1: 0.40 tag match against your own Raindrop tag vocabulary, 0.30 echo (sites you read, from local history and bookmarks), 0.20 feed standing (learned from your actions) and 0.10 freshness. Training rules from More and Less buttons add or subtract up to 0.2, and feeds you have not opened this session get a small novelty boost. The score is stretched for display and shown as colour and a number, never as tiers.
+Each unread article gets a score from 0 to 1: 0.40 tag match against your own Raindrop tag vocabulary, 0.30 echo (sites you read, from local history and bookmarks), 0.20 feed standing (learned from your actions) and 0.10 freshness. Training rules (thumbs, tag and word buttons, and More and Less on a feed or author) add or subtract up to 0.2 in total, tags match your own Raindrop tags of the exact page as well as suggested ones, words match stems, and feeds you have not opened this session get a small novelty boost. The score is stretched for display and shown as colour and a number, never as tiers.
 
 | Action | Effect on the feed's standing | Pull on your interest profile |
 |---|---|---|
@@ -260,7 +285,7 @@ No telemetry. Data goes only to servers you configure. Credentials are stored un
 
 ```
 npm install
-npm test            # 143 tests: engine, event log, sync, services, search, bulk marking, reader screen under jsdom
+npm test            # 226 tests: engine, event log, sync, services, search, bulk marking, reader screen under jsdom
 npm run lint        # Mozilla's web-ext lint
 node tools/failure-rates.mjs 150 --write
 node tools/example-run.mjs
@@ -276,7 +301,7 @@ See [DEPLOY.md](DEPLOY.md). The short version: download `pravaha.xpi` from the l
 
 ```
 npm install
-npm test                       # 200 tests
+npm test                       # 226 tests
 node tools/failure-rates.mjs   # random failure injection, see docs/FAILURE_RATES.md
 npm run lint                   # Mozilla's web-ext lint
 ```
@@ -285,6 +310,7 @@ The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. 
 
 ## What has not been verified
 
+- **Everything new in 0.7.0 is untested against a real Raindrop or Miniflux.** The Raindrop context (exact save and close saves) uses the copy already kept for ranking, and was driven in real Firefox 160 against a fake Raindrop only. The exact-page match depends on the address matching after tracking parameters are removed; a site that serves other articles from one address would match wrongly. The similarity threshold for "close to something you saved" (0.22) was set by eye on synthetic text, and the 0.3 weight of a thumb was tuned on synthetic data, so both may need adjusting on your library. The speed figures for tag suggestion (about 0.3 s at 3,000 articles, 2,000 saves) come from a headless Node run, not your machine. A copy of Pravaha older than 0.5.0 on another machine will not understand the new training entries.
 - **Everything new in 0.6.0 is untested against a real Miniflux.** The entry-number call (`GET /entries/ids`, Miniflux 2.3.2 or newer), the position marker (`after_entry_id`), feed and folder changes (`PUT /feeds/{id}`, `PUT /categories/{id}`, `DELETE /feeds/{id}`) and the refresh calls follow the documentation and are tested against fakes and in real Firefox against a fake server. The Check server button on the Sync page is how you find out on your own server; if a call is missing there, Pravaha uses the older path by itself. Folder and all-feed refresh only show their effect the first time you use them. A folder rename that fails part-way leaves some folders renamed; the message says which, and the page then follows Miniflux.
 - **Speed numbers are from a headless benchmark on synthetic data** (see CHANGELOG), not from your library on your machine.
 - **Real Firefox, with limits.** Since 0.4.0 the setup-moving, status and quiet-poll behaviour is exercised in real Firefox 160 (the base of Zen) with `tools/firefox-e2e/`. Zen itself, a long-running profile and the older 0.3.x screens (scroll behaviour, the right-click menu) have not been driven that way.
@@ -317,7 +343,7 @@ See [docs/SCHEMA.md](docs/SCHEMA.md), [docs/POLICY.md](docs/POLICY.md) and [docs
 
 ## Licence
 
-Pravaha includes code from Bionify (GPL-3.0), so it is released under the GNU General Public License v3. The full text is in `LICENSE`. Bundled fonts are under the SIL Open Font Licence, except Ubuntu, which is under the Ubuntu Font Licence 1.0 (see `extension/ui/fonts`). SF Pro and New York belong to Apple and are not included.
+Pravaha includes code from Bionify (GPL-3.0), so it is released under the GNU General Public License v3. The full text is in `LICENSE`. No fonts are bundled in this repository. SF Pro and New York belong to Apple; they are added only to your own build (see above) and must not be redistributed.
 
 ## Disclaimer
 

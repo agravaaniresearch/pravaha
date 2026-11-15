@@ -23,7 +23,7 @@ o.observe(document.body, {subtree:true, childList:true, characterData:true, attr
 try:
     A.open()
     A.send({"type": "saveSettings", "patch": {"device": "laptop", "miniflux": MF, "webdav": DAV, "pollMinutes": 1}})
-    A.send({"type": "saveUi", "ui": {"theme": "oled", "readFont": "ubuntu"}}); A.send({"type": "syncNow"})
+    A.send({"type": "saveUi", "ui": {"theme": "oled", "readFont": "sfpro"}}); A.send({"type": "syncNow"})
     B.open(); time.sleep(1); mirror(); time.sleep(4); mirror()
     B.send({"type": "saveSettings", "patch": {"device": "home"}}); B.send({"type": "syncNow"}); A.send({"type": "syncNow"}); mirror()
     A.send({"type": "train", "kind": "tag", "key": "warm", "value": 1}); A.send({"type": "syncNow"}); B.send({"type": "syncNow"}); A.send({"type": "syncNow"}); B.send({"type": "syncNow"})  # warm up: first arrivals are announced once, outside the measured window

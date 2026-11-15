@@ -27,7 +27,7 @@ One JSON object per line.
 | `entry` | Miniflux entry id, when the event is about an article |
 | `feed` | Miniflux feed id |
 | `card` | An article was read as an in-reader card. Logged once per article per session. Adds 0.05 to the feed's standing and a 0.02 pull on the interest profile, against 0.15 and 0.05 for `open` (a background tab) |
-| `payload` | Type specific. `dwell`: `{ms}`. `open` and `save`: `{terms, score}` so the interest profile replays identically. `train`: `{type, key, value}`. `order`: `{scope, ids}` |
+| `payload` | Type specific. `dwell`: `{ms}`. `open` and `save`: `{terms, score}` so the interest profile replays identically. `train`: `{type, key, value}`; for `type: "story"` also `keys` (the tag and keyword rules that thumb set, so it can be undone exactly) and, for a thumbs up, `terms` (the article's top stems, which pull the interest profile at rate 0.08). `order`: `{scope, ids}` |
 
 Rules that make merging safe:
 
@@ -35,11 +35,12 @@ Rules that make merging safe:
 - Derived state is a pure function of the sorted event list and the current time. Same events, same result.
 - `order` records the full order of the top-level folders after a drag or a Move up/down. `scope` is `"root"` (the only scope written by 0.5.0), `ids` is the ordered list of folder ids such as `cat:Defence`, followed by the ids of anything else at that level. The event with the latest `ts` for a scope wins. A machine uses the event order only when the event's wall time is later than `settings.treeOrderAt`, the time of the last order change made or received through Firefox Sync, so the two routes cannot disagree for long. Feeds are never reordered by Pravaha; their order is set in Miniflux. Versions before 0.5.0 count an `order` line as an invalid line, so update every machine.
 - `undismiss` and `unsave` undo the matching earlier event. A later `train` for the same type and key replaces an earlier one, and value 0 removes the rule.
+- **Training rules (`train`).** `type` is `tag`, `keyword`, `feed`, `author` or `story`; `key` is lower case; `value` is a finite number from -3 to 3 (the screen writes 1, -1 or 0 for a click, and +/-0.3 for the rules a thumb sets). `tag` rules match an article's tags: the ones the feed sent, the tags of your own Raindrop save of that exact page, and the tags suggested from your Raindrop vocabulary. `keyword` rules match the article's top stems, so the key is a stem (`frigate`, not `frigates`; versions before 0.7.0 wrote the raw word, which never matched a plural). A `story` entry is bookkeeping for a thumb on one article (key = article id, value 1 or -1, 0 removes it); it has no effect on a score, is not listed as a rule, and its `keys` field lets a second press clear exactly the rules the thumb set, and only those whose value is still the one the thumb wrote. No new event type was added in 0.7.0, so a copy of Pravaha from before it still reads every event; it would list a `story` entry as an unknown rule.
 
 ## Derived state
 
 - **Feed standing** = clamp(0.3 + sum of signals each multiplied by 0.5^(age / 14 days)). Signals: open +0.15, dwell over 15 seconds +0.10, read without opening or dismiss -0.05, save +0.25, unsave -0.25.
-- **Interest profile.** A recency weighted mean of Raindrop bookmark vectors (half life 365 days), pruned to 500 terms. Each open pulls it at rate 0.05 and each save at 0.12.
+- **Interest profile.** A recency weighted mean of Raindrop bookmark vectors (half life 365 days), pruned to 500 terms. Each open pulls it at rate 0.05, each save at 0.12 and each thumbs up at 0.08. A thumbs down does not push the profile away.
 - **Echo profile.** A vector and domain counts built from bookmarks and history, exchanged between machines as snapshots in `state/<device>.json`.
 
 ## Score
@@ -61,7 +62,7 @@ with outside score s:  final = 0.8*final + 0.2*s
 
 ## Local storage keys
 
-`settings`, `cache` (articles, feeds, and `recent`), `bodies` (article HTML fetched on demand, trimmed with the cache), `icons` (feed icons as data URLs), `searchIndex`, `events`, `syncState`, `pendingOps` (Miniflux changes waiting to send), `raindropCache`, `echoLocal`, `enrichment`, `net`, `others`, `pendingHistory`. Dwell tracker state is kept in `storage.session` because the background page can unload.
+`settings`, `cache` (articles, feeds, and `recent`), `bodies` (article HTML fetched on demand, trimmed with the cache), `icons` (feed icons as data URLs), `searchIndex`, `events`, `syncState`, `pendingOps` (Miniflux changes waiting to send), `raindropCache` (`{at, v: 2, bookmarks: [{title, excerpt, note, tags, domain, at, link}]}`; a copy without `v: 2` has no links and is fetched again at once), `echoLocal`, `enrichment`, `net`, `others`, `pendingHistory`. Dwell tracker state is kept in `storage.session` because the background page can unload.
 
 ### `pendingOps`
 
@@ -181,3 +182,15 @@ Targeted refresh. `refreshScope` with `feed:<id>` calls `PUT /feeds/{id}/refresh
 ### Schema changes to existing keys
 
 `net.miniflux` gains `mode` (`light` | `full`), `calls` (requests made by the last refresh) and `bytes` (approximate size of the last refresh's responses). When the server's version number changes, `noteVersion` records `changed {from, to, at}` and sets every learned capability (`entryIds`, `afterEntryId`, `categoryRefresh`, `feedRefresh`) back to unknown, so each is learned again against the new server. `status()` gains `server`. No event types change, so the history log and Firefox Sync parts are untouched, and machines on 0.5.0 keep working with machines on 0.6.0.
+
+## Raindrop context for an article (0.7.0)
+
+The card asks the engine for `trainerFor(id)`: the article's tags (your own Raindrop tags first, then suggested ones, then the feed's, at most six), up to five title words with the stem each is trained as, the feed and author rules, and `raindrop: { configured, count, exact, related }`. `exact` is the saved page whose address matches the article's after both are reduced to one form (no scheme, no `www`, no fragment, no tracking parameters such as `utm_*`, `fbclid`, `gclid`, no trailing slash, remaining parameters sorted). `related` is up to two other saved pages whose text vectors have a cosine of at least 0.22 with the article. Nothing in it leaves the machine; the Raindrop copy is the one already kept for ranking.
+
+Tag suggestion uses an index from each word to the tags whose profile contains it, built once per model, so an article is compared only with the tags it shares a word with. It gives the same tags, order and scores (to three decimals) as comparing every pair; a test checks this on random data.
+
+A thumb on an article (`rateStory`) sets a rule of +/-0.3 on its top three tags (your own Raindrop tags first) and top three words. At 0.3 of a full click, six rules together stay under the scorer's 0.2 cap, so a tag clicked afterwards still moves the score.
+
+## Digest additions (0.7.0)
+
+Each of the top articles carries `saved in Raindrop` (exact match) or `close to your Raindrop save "title"` (closest related). A new section **What you trained** lists the tags, words, feeds and authors currently set to more and to less (twelve of each at most). The digest is still written weekly (`digests/<ISO week>.md`).

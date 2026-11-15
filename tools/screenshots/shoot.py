@@ -40,7 +40,7 @@ try:
         pg, _ = page(prefs(theme="dark")); pg.keyboard.press("a"); pg.wait_for_timeout(300); pg.locator(".dialog .urlrow input").fill("harbourweekly.example"); pg.locator("[data-act='find']").click(); pg.wait_for_timeout(700); pg.locator(".feedopt input").first.check(); pg.wait_for_timeout(200); shot(pg, "15-add-feed")
         pg, _ = page(prefs(theme="light", anchor=True, readFont="sourceserif")); pg.locator(".row .rtitle").first.click(); pg.wait_for_timeout(900); shot(pg, "16-bionic-button-and-fonts")
         pg, _ = page(prefs(theme="dark")); pg.locator(".tab", has_text="Settings").click(); pg.wait_for_timeout(400); pg.locator(".stab", has_text="Look").click(); pg.wait_for_timeout(500); shot(pg, "17-settings-fonts-and-confirm")
-        pg, _ = page(prefs(theme="dark", readFont="newyork", uiFont="ubuntu")); pg.locator(".tab", has_text="Settings").click(); pg.wait_for_timeout(400); pg.locator(".stab", has_text="Look").click(); pg.wait_for_timeout(600); pg.evaluate("[...document.querySelectorAll('.panel h2')].find(x => x.textContent === 'Fonts').scrollIntoView({block: 'start'})"); pg.wait_for_timeout(300); shot(pg, "18-font-picker")
+        pg, _ = page(prefs(theme="dark", readFont="newyork", uiFont="system")); pg.locator(".tab", has_text="Settings").click(); pg.wait_for_timeout(400); pg.locator(".stab", has_text="Look").click(); pg.wait_for_timeout(600); pg.evaluate("[...document.querySelectorAll('.panel h2')].find(x => x.textContent === 'Fonts').scrollIntoView({block: 'start'})"); pg.wait_for_timeout(300); shot(pg, "18-font-picker")
         b.close()
 finally:
     srv.terminate()

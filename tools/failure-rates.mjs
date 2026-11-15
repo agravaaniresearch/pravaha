@@ -144,6 +144,49 @@ for (const p of RATES) {
 const renTable = "| Request failure rate | All three renamed | Partly renamed and the reader said so | Not renamed, no explanation | Said it succeeded while Miniflux disagrees | View differs from Miniflux after recovery | Unhandled errors |\n|---|---|---|---|---|---|---|\n" +
   renRows.map(x => `| ${Math.round(x.p * 100)}% | ${x.c} | ${x.pr} | ${x.unexplained} | ${x.w} | ${x.d} | ${x.cr} |`).join("\n");
 console.log("\n" + renTable);
+
+// ---------- training: thumbs and tag clicks (0.7.0) ----------
+async function trainTrial(seed, p) {
+  const r = rng(seed); const ctl = { p: 0 };
+  const chaos = () => { if (ctl.p === 0) return null; const x = r(); return x < ctl.p * 0.6 ? "throw" : x < ctl.p ? 500 : null; };
+  const dav = makeDav({ faults: chaos }), mf = makeMiniflux({ faults: chaos });
+  const topics = ["navy ship port", "tax budget bank", "recipe cake oven", "cricket match score"];
+  const rd = makeRaindrop({ faults: chaos, bookmarks: Array.from({ length: 16 }, (_, i) => ({ _id: i, title: `${topics[i % 4]} note ${i}`, excerpt: topics[i % 4], note: "", tags: [["defence", "economy", "food", "sport"][i % 4], "watch"], link: `https://saved.example/${i}`, lastUpdate: new Date().toISOString() })) });
+  mf.st.feeds = [feed(1, "A", "X/Y"), feed(2, "B", "Z")];
+  for (let i = 1; i <= 24; i++) { const e = entry(i, 1 + (i % 2), `Story ${i} about ${topics[i % 4]}`, `${topics[i % 4]} details ${i}`, i); e.feed = { id: e.feed_id, title: "F", category: { title: "X" } }; mf.st.entries.push(e); }
+  const fetchImpl = router({ dav, mf, rd });
+  const mk = async (name) => { const s = new MemoryStorage(); await s.set({ settings: settings(name, { raindrop: { token: "rd-token" } }) }); const e = new Engine({ storage: s, fetchImpl }); await e.load(); return e; };
+  const M = [await mk("laptop"), await mk("desktop")]; let crashes = 0; const quiet = () => { for (const m of M) { for (const t of m._timers) clearTimeout(t); m._timers.clear(); } };
+  await M[0].syncNow(); await M[1].syncNow(); quiet();
+  const base = Array.from({ length: 24 }, (_, i) => M[0].scoreRow(i + 1).score); const rated = new Set(), tagged = new Set();
+  ctl.p = p;
+  for (let step = 0; step < 30; step++) {
+    const m = M[Math.floor(r() * 2)]; const id = 1 + Math.floor(r() * 24); const op = Math.floor(r() * 5);
+    try {
+      if (op === 0) await m.syncNow(); else if (op <= 2) { await m.rateStory(id, [1, -1, 0][Math.floor(r() * 3)]); rated.add(id); }
+      else { const t = ["defence", "economy", "food", "sport", "watch"][Math.floor(r() * 5)]; await m.train("tag", t, [1, -1, 0][Math.floor(r() * 3)]); tagged.add(t); }
+    } catch { crashes++; }
+    quiet();
+  }
+  ctl.p = 0; for (let i = 0; i < 3; i++) for (const m of M) { try { await m.syncNow(); } catch { crashes++; } } quiet();
+  const key = (m) => m.trainingRules().map(x => `${x.type}:${x.key}:${x.value}`).sort().join("|"); const stories = (m) => Object.keys(m._derive().story).sort().map(k => `${k}:${m._derive().story[k].value}`).join("|");
+  const converged = key(M[0]) === key(M[1]) && stories(M[0]) === stories(M[1]);
+  const sameScores = Array.from({ length: 24 }, (_, i) => M[0].scoreRow(i + 1).score === M[1].scoreRow(i + 1).score).every(Boolean);
+  for (const id of rated) await M[0].rateStory(id, 0); for (const t of tagged) await M[0].train("tag", t, 0);
+  for (let i = 0; i < 3; i++) for (const m of M) await m.syncNow(); quiet();
+  // After every thumb and tag is cleared, no rule should remain and every score should be what it was before any training.
+  const clean = M[0].trainingRules().length === 0 && Object.keys(M[0]._derive().story).length === 0 && M[1].trainingRules().length === 0;
+  const back = Array.from({ length: 24 }, (_, i) => M[0].scoreRow(i + 1).score === base[i]).every(Boolean);
+  return { converged, sameScores, clean, back, crashes };
+}
+const trRows = []; const NT = Math.min(TRIALS, 60);
+for (const p of RATES) {
+  let c = 0, s2 = 0, cl = 0, bk = 0, cr = 0;
+  for (let i = 0; i < NT; i++) { const t = await trainTrial(17000 + i * 31 + Math.round(p * 100), p); c += t.converged; s2 += t.sameScores; cl += t.clean; bk += t.back; cr += t.crashes > 0; }
+  const f = (n) => (100 * n / NT).toFixed(1) + "%"; trRows.push({ p, c: f(c), s: f(s2), cl: f(cl), bk: f(bk), cr: f(cr) });
+}
+const trTable = "| Request failure rate | Both machines hold the same training | Both rank every article the same | No rule left after clearing | Scores exactly as before any training | Trials with an unhandled error |\n|---|---|---|---|---|---|\n" + trRows.map(x => `| ${Math.round(x.p * 100)}% | ${x.c} | ${x.s} | ${x.cl} | ${x.bk} | ${x.cr} |`).join("\n");
+console.log("\n" + trTable);
 const head = "| Request failure rate | Converged | Same state on both | Trials with a lost read | Stars correct | Lights all green | Trials with an unhandled error | Avg recovery passes | Worst |\n|---|---|---|---|---|---|---|---|---|";
 const table = head + "\n" + rows.map(x => `| ${Math.round(x.p * 100)}% | ${x.converged} | ${x.stateEqual} | ${x.lost} | ${x.stars} | ${x.green} | ${x.crash} | ${x.avg} | ${x.worst} |`).join("\n");
 console.log(table);
@@ -151,4 +194,5 @@ if (process.argv.includes("--write")) {
   writeFileSync(new URL("../docs/FAILURE_RATES.md", import.meta.url), `# Failure rates\n\nGenerated by \`node tools/failure-rates.mjs ${TRIALS} --write\`. Seeded, so a re-run gives the same numbers.\n\nEach trial runs two machines for 40 random actions (sync, mark read, open, dismiss, save, train, dwell) against fake Miniflux, WebDAV and Raindrop servers. During the actions, each request fails at the stated rate (60% as a dropped connection, 40% as a server error). Then the network recovers and both machines sync up to six passes. ${TRIALS} trials per row.\n\n${table}\n\n## How to read this\n\n- **Converged** means both machines hold the same events and nothing is waiting to be sent.\n- **Lost read** means an article the reader marked read never reached Miniflux after recovery.\n- **Unhandled error** means an action threw instead of queueing. It should be zero at every rate.\n- This measures the reader's own queueing and merging logic. It does not measure real Miniflux, Fastmail or Raindrop behaviour, which these fakes only imitate.\n`);
   appendFileSync(new URL("../docs/FAILURE_RATES.md", import.meta.url), `\n## Marking many articles read (0.3.0)\n\nOne reader marks 240 articles read in one action while requests fail at the stated rate, and the fake Miniflux silently ignores about 8% of the ids it is sent, which is the failure behind "some of the unread articles remain". After the network recovers there are six sync passes, then the count of articles still unread on Miniflux is taken. The first variant imitates 0.2.3: whatever Miniflux reports afterwards wins and nothing is sent again. The second only sends again on the next refresh. The third is 0.3.0: it asks Miniflux straight after the bulk mark, sends again what did not stick, and also sends again on later refreshes. ${Math.min(TRIALS, 100)} trials per row.\n\n${bulkTable}\n\n- A trial with leftovers means that after recovery some article the reader had marked read was still unread on Miniflux.\n- "Said confirmed while some were unread" must be zero: the reader never reports a confirmation it did not get.\n- The fake imitates one failure mode. Real Miniflux may fail in other ways, which is why the reader asks Miniflux afterwards instead of trusting its own request.\n`);
   appendFileSync(new URL("../docs/FAILURE_RATES.md", import.meta.url), `\n## Light refresh and feed management (0.6.0)\n\n**Light refresh.** One reader holds 200 unread articles. While it refreshes, 15 more arrive and 10 are read in another app, and requests fail at the stated rate. After the network recovers the reader's unread list must equal Miniflux's. The second block makes Miniflux answer the entry-number call in a shape Pravaha does not know, as a silent server update could; the reader must fall back to the full download, stay correct, and not turn the server light red for a harmless change.\n\n${lightTable}\n\n**Renaming a folder.** A folder with two subfolders is three Miniflux categories, renamed one call at a time, so a failure part-way leaves some renamed. "Not renamed, no explanation" and "said it succeeded while Miniflux disagrees" must both be zero.\n\n${renTable}\n\n- ${NL} trials per light-refresh row and ${NR} per rename row, seeded.\n- The fakes imitate the documented Miniflux behaviour. They do not prove that the live server behaves the same way; the Check server button on the Sync page is how that is found out.\n`);
+  appendFileSync(new URL("../docs/FAILURE_RATES.md", import.meta.url), `\n## Thumbs and tag training (0.7.0)\n\nTwo readers rate articles and click tags at random for 30 steps, on 24 articles with 16 saved pages in Raindrop, while every request (Miniflux, WebDAV and Raindrop) fails at the stated rate. The network then recovers, both sync, and the numbers are read. After that the first reader takes back every thumb and tag it touched, they sync again, and the scores are compared with what they were before any training. ${NT} trials per row.\n\n${trTable}\n\nWhat the columns mean: the training is shared through the history log, so it can only differ between machines while a sync is still pending; once the network recovers both must agree. A thumb remembers exactly which rules it set, so clearing everything must leave no rule behind and every score must return to its starting value; a row below 100% in the last two columns would mean a thumb left residue.\n`);
 }

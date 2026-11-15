@@ -66,7 +66,7 @@ To go back, install the older `.xpi` over this one. The extra storage keys (`sea
 
 ## 5c. Optional: SF Pro and New York (your own build only)
 
-Apple's fonts are not in the repository. To use them yourself: `pip install fonttools brotli`, `python3 tools/apple-fonts.py`, then build and sign as usual from the same checkout. The files land in `extension/ui/fonts/apple/`, which is git-ignored, so they stay out of commits. The signed build from the GitHub release workflow will not contain them (the picker will show "Not in this build"); sign locally if you want them. Do not share an extension built this way.
+From 0.7.0 these two Apple fonts are the only fonts Pravaha carries (SF Pro for the interface, New York for reading); the open fonts were removed. Apple's fonts are not in the repository. To use them yourself: `pip install fonttools brotli`, `python3 tools/apple-fonts.py`, then build and sign as usual from the same checkout. The files land in `extension/ui/fonts/apple/`, which is git-ignored, so they stay out of commits. The signed build from the GitHub release workflow will not contain them: the picker will show "Not in this build" and the reader falls back to your system serif and sans. Sign locally if you want them. Do not share an extension built this way.
 
 ## 6. Backups and recovery
 
@@ -91,6 +91,18 @@ Nothing needs doing on the storage; no event type changed. Install the new file 
 5. Folder refresh and Refresh every feed ask Miniflux to fetch in the background, so new articles appear within a minute. Miniflux may refuse refreshes that come too often; Pravaha then says so.
 
 `e2e060.py` (0.6.0) drives the Feeds tab, the folder menu, the server tile and Check server, and a large library, in real Firefox. `perf_drag.py`, `perf_view.py` and `perf_calls.py` print the numbers in CHANGELOG.md. Start the fake servers first with `BIG=30x14 node tools/firefox-e2e/serve.mjs 8799` (restart them before every run).
+
+## 6d. Updating to 0.7.0
+
+No change to the storage and no new event type. Install the new file on each machine; Firefox asks for no new permission. Machines on 0.5.0 or later keep working side by side; one still on an older build will list a thumb's bookkeeping as an odd rule but nothing breaks.
+
+1. Settings, Look and reading now offers only New York, SF Pro and the system fonts. A saved choice of any other font falls back to New York (reading) or SF Pro (interface) by itself. If you build the signed file yourself, run `python3 tools/apple-fonts.py` first, or the fonts will fall back to the system ones.
+2. Open an article. Under the buttons there is a **Tags** and **Words** strip. Click a chip once for more of it, again for less, a third time to clear. The thumbs (or `+` and `-`) train on the top three tags and words together; press again to take it back.
+3. If you use Raindrop, the first sync after the update fetches your saves again (the copy now keeps each link). Until that finishes the card cannot say "You saved this page".
+4. The weekly digest has a new **What you trained** section, and notes articles you already saved in Raindrop.
+5. Training on tags needs your Raindrop tags to suggest from. Without a token the strip says so and still offers words.
+
+`shots070.py` drives the thumbs, the strip and the Raindrop line in real Firefox against a fake Raindrop (`serve.mjs` serves it under `/rd`; `ff.py` points the copy under test there, never at the real Raindrop). `WITH_APPLE=1` includes the Apple fonts in that copy. `node tools/failure-rates.mjs 150 --write` regenerates `docs/FAILURE_RATES.md`, which now includes the training trials.
 
 ## 7. Testing in real Firefox
 

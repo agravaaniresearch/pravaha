@@ -20,7 +20,7 @@ const PATHS = {
   gauge: "M4 17a8 8 0 1116 0M12 17l4-5",
   devices: "M3 7h12v8H3zM1 19h16M18 9h4v10h-4z",
   layers: "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5",
-  clock: "M12 7v5l3 2M12 3a9 9 0 100 18 9 9 0 000-18z", bookmark: "M6 3h12v18l-6-4-6 4z", help: "M9.5 9a2.5 2.5 0 115 0c0 1.7-2.5 2-2.5 4M12 17h.01M12 3a9 9 0 100 18 9 9 0 000-18z"
+  clock: "M12 7v5l3 2M12 3a9 9 0 100 18 9 9 0 000-18z", bookmark: "M6 3h12v18l-6-4-6 4z", thumbup: "M7 11v9H4a1 1 0 01-1-1v-7a1 1 0 011-1zM7 11l4-8a2 2 0 012 2v4h5.5a2 2 0 012 2.3l-1.2 6.5A2 2 0 0117.4 20H7", thumbdown: "M17 13V4h3a1 1 0 011 1v7a1 1 0 01-1 1zM17 13l-4 8a2 2 0 01-2-2v-4H5.5a2 2 0 01-2-2.3l1.2-6.5A2 2 0 016.6 5H17", help: "M9.5 9a2.5 2.5 0 115 0c0 1.7-2.5 2-2.5 4M12 17h.01M12 3a9 9 0 100 18 9 9 0 000-18z"
 };
 // An icon is built once per name, size and fill, then copied. Copying a finished element is much cheaper than setting ten attributes each time,
 // and a long list of articles draws hundreds of them.

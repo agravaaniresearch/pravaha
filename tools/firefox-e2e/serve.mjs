@@ -10,6 +10,8 @@ if (process.env.BIG) { // a large synthetic library for performance probes: BIG=
   for (let c = 0; c < nf; c++) for (let k = 0; k < per; k++) { const id = fid++; w.mf.st.feeds.push({ id, title: `Synthetic feed ${c}-${k}`, category: { title: `Topic ${String(c).padStart(2, "0")}${k % 4 === 0 ? "/Sub " + (k % 3) : ""}` }, parsing_error_count: 0, checked_at: new Date().toISOString(), disabled: false });
     for (let j = 0; j < 3; j++) { const e = { id: eid++, feed_id: id, feed: { id, title: `Synthetic feed ${c}-${k}`, category: { title: `Topic ${c}` } }, title: `Synthetic story ${c}-${k}-${j}`, content: "<p>Synthetic body.</p>", published_at: new Date(Date.now() - (j + 1) * 3600000).toISOString(), url: `https://site${id}.example/${eid}`, status: "unread", starred: false, author: "", tags: [], reading_time: 3 }; w.mf.st.entries.push(e); } }
 }
+// A page you saved in Raindrop (the first article, with a tracking tail on the link) so the card can show it. Synthetic.
+w.rd.st.bookmarks.push({ _id: 900, title: "Navy orders new frigates from shipyard", excerpt: "", note: "Synthetic note: read before the budget talk", tags: ["defence", "to-read"], link: "https://www.site1.example/1/?utm_source=newsletter#top", lastUpdate: "2026-03-12T00:00:00Z" });
 const hit = { mf: 0, dav: 0, log: [] };
 const server = http.createServer(async (req, res) => {
   const chunks = []; for await (const c of req) chunks.push(c); const body = Buffer.concat(chunks).toString();
@@ -19,6 +21,10 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === "/ctl/blank") { res.writeHead(200, { ...cors, "content-type": "text/html" }); return res.end("<!doctype html><title>launcher</title><a id=go>go</a>"); }
   if (u.pathname === "/ctl/hits") { res.writeHead(200, { ...cors, "content-type": "application/json" }); return res.end(JSON.stringify({ mf: hit.mf, dav: hit.dav, tail: hit.log.slice(-30) })); }
   if (u.pathname === "/ctl/reset") { hit.mf = 0; hit.dav = 0; hit.log = []; res.writeHead(204, cors); return res.end(); }
+  if (u.pathname.startsWith("/rd/")) { // Raindrop: the extension copy under test points its API address here
+    const r = await w.rd.handler("https://api.raindrop.io" + u.pathname.slice(3) + u.search, { method: req.method, headers: { Authorization: req.headers.authorization || "" }, body: body || undefined });
+    res.writeHead(r.status, { ...cors, "content-type": "application/json" }); return res.end(await r.text());
+  }
   const m = u.pathname.match(/^\/(mf|dav)(\/.*)?$/);
   if (!m) { res.writeHead(404, cors); return res.end("not found"); }
   hit[m[1]]++; hit.log.push(`${req.method} ${u.pathname}`);

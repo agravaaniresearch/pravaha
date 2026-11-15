@@ -31,3 +31,19 @@ console.log("  " + (await A.folderRename("Defence", "Maritime")).sentence);
 console.log("  " + (await A.feedDelete(4, "wrong name")).sentence);
 console.log("\nCheck server (read-only):"); for (const l of (await A.serverCheck()).lines) console.log(`  ${l.state.padEnd(6)} ${l.text}`);
 console.log("\nFolder tree now:"); for (const n of A.tree()) console.log("  " + "  ".repeat(n.depth) + n.label + (n.unread ? ` (${n.unread})` : ""));
+
+// ---- 0.7.0: thumbs, clickable tags, Raindrop context ----
+console.log("\n--- 0.7.0: training in plain sight ---");
+rd.st.bookmarks.push({ _id: 900, title: "Shipyard signs frigate contract", excerpt: "frigate shipyard navy contract", note: "Compare with last year's tender", tags: ["defence", "to-read"], link: "https://www.site1.example/1/?utm_source=newsletter#top", lastUpdate: "2026-03-12T00:00:00Z" });
+await A.refreshRaindrop(true);
+const show1 = (t) => { console.log(`  tags:  ${t.tags.map(x => `${x.tag}${x.source === "raindrop" ? " (your Raindrop tag)" : ""}${x.value ? " [" + (x.value > 0 ? "more" : "less") + "]" : ""}`).join(", ") || "none"}`); console.log(`  words: ${t.words.map(x => x.word + (x.value ? " [" + (x.value > 0 ? "more" : "less") + "]" : "")).join(", ")}`); };
+let t1 = A.trainerFor(1); console.log("The card for “Shipyard signs frigate contract”:"); show1(t1);
+const rdx = t1.raindrop.exact; console.log(`  Raindrop: you saved this page (${rdx.tags.map(x => "#" + x).join(" ")}) with the note “${rdx.note}”`);
+console.log("  Close to something you saved: " + (t1.raindrop.related.map(x => `“${x.title}” (sim ${x.sim})`).join("; ") || "nothing close enough (a save is offered only above a similarity of 0.22)"));
+const before = A.scoreRow(1).score; const up = await A.rateStory(1, 1);
+console.log(`\nThumbs up: score ${Math.round(before * 100)} -> ${Math.round(up.score * 100)}; trained ${up.labels.join(", ")}`);
+await A.train("tag", "to-read", -1); console.log(`Click the “to-read” tag so it is “less”: score ${Math.round(up.score * 100)} -> ${Math.round(A.scoreRow(1).score * 100)}`);
+await A.rateStory(1, 0); console.log(`Take the thumb back: score ${Math.round(A.scoreRow(1).score * 100)}; the hand-set “to-read: less” rule is kept: ${A.trainingRules().map(r => `${r.type}:${r.key}:${r.value}`).join(", ")}`);
+await A.rateStory(2, -1); await A.syncNow(); await B.syncNow();
+console.log(`The desktop, which never saw the clicks, holds the same rules: ${B.trainingRules().map(r => `${r.type}:${r.key}:${r.value}`).sort().join(", ")}`);
+const dg = await A.writeDigest(); console.log("\nThe digest now carries:\n" + dg.md.split("\n").filter(l => /What you trained|More of|Less of|saved in Raindrop/.test(l)).map(l => "  " + l).join("\n"));

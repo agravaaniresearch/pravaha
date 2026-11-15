@@ -80,7 +80,7 @@ export function parseSegment(text) {
 // Replay the whole log into derived state. Deterministic: same events, same result.
 export function derive(events, now) {
   const cards = new Map(), dismissed = new Map(), saved = new Map(), opens = new Map(), dwell = new Map(), trainMap = new Map();
-  const authority = new Map(); const pulls = []; const orders = new Map();
+  const authority = new Map(); const pulls = []; const orders = new Map(); const stories = new Map();
   const bump = (feed, d, ts) => {
     if (feed === undefined || feed === null) return;
     const k = String(feed); const age = Math.max(0, now - parseTs(ts).wall);
@@ -112,13 +112,18 @@ export function derive(events, now) {
         break;
       case "unsave": saved.set(e.entry, false); bump(e.feed, -AUTHORITY_SIGNALS.save, e.ts); break;
       case "order": if (typeof p.scope === "string" && Array.isArray(p.ids)) orders.set(p.scope, { ids: p.ids.map(String), wall: parseTs(e.ts).wall }); break;
-      case "train": trainMap.set(`${p.type}:${p.key}`, { type: p.type, key: p.key, value: p.value }); break;
+      // A thumb on a whole article is stored as a train event of type "story"; it remembers which tag and word rules it set, so it can be undone cleanly.
+      case "train":
+        if (p.type === "story") stories.set(String(p.key), { value: p.value, keys: Array.isArray(p.keys) ? p.keys.filter(k => k && typeof k.type === "string" && typeof k.key === "string").slice(0, 12) : [], terms: Array.isArray(p.terms) ? p.terms.slice(0, 16) : null });
+        else trainMap.set(`${p.type}:${p.key}`, { type: p.type, key: p.key, value: p.value });
+        break;
     }
   }
   const training = [...trainMap.values()].filter(r => r.value !== 0);
+  const story = {}; for (const [k, v] of stories) if (v.value === 1 || v.value === -1) { story[k] = v; if (v.value > 0 && v.terms) pulls.push({ kind: "up", terms: v.terms }); }
   return {
     dismissed: new Set([...dismissed].filter(([, v]) => v).map(([k]) => k)),
     saved: new Set([...saved].filter(([, v]) => v).map(([k]) => k)),
-    opens, cards, dwell, authorityDelta: Object.fromEntries(authority), training, pulls, order: Object.fromEntries(orders)
+    opens, cards, dwell, authorityDelta: Object.fromEntries(authority), training, story, pulls, order: Object.fromEntries(orders)
   };
 }
