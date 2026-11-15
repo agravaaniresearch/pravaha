@@ -11,12 +11,12 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
 const until = async (fn, ms = 6000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await wait(40); } return !!fn(); };
 let n = 0;
 const syncArea = () => { const m = new Map(); return { m, get: async (keys) => Object.fromEntries(keys.filter(k => m.has(k)).map(k => [k, JSON.parse(JSON.stringify(m.get(k)))])), set: async (o) => { for (const [k, v] of Object.entries(o)) m.set(k, JSON.parse(JSON.stringify(v))); } }; };
-async function mount({ prep, noToken = false, prefs = null, fontProbe = null, area = syncArea() } = {}) {
+async function mount({ prep, noToken = false, prefs = null, fontProbe = null, area = syncArea(), detect = null } = {}) {
   const w = await world(); if (prep) prep(w);
   const storage = new MemoryStorage(); await storage.set({ settings: settings("laptop", noToken ? { miniflux: { url: "https://mf.test", token: "" } } : {}) });
   const listeners = []; const opened = [];
   const engine = new Engine({ storage, fetchImpl: w.fetchImpl, onChange: () => listeners.forEach(f => f({ type: "changed" })) }); await engine.load(); if (!noToken) await engine.syncNow();
-  const handlers = makeHandlers({ engine, fetchImpl: w.fetchImpl, runSync: () => engine.syncNow(), schedule: async () => {}, openTab: async (r) => { opened.push(r.url); }, profile: new ProfileSync({ engine, area }) });
+  const handlers = makeHandlers({ engine, fetchImpl: w.fetchImpl, runSync: () => engine.syncNow(), schedule: async () => {}, openTab: async (r) => { opened.push(r.url); }, detect, openSubscribe: async (u) => { opened.push('subscribe:' + u); }, profile: new ProfileSync({ engine, area }) });
   const dom = new JSDOM('<!doctype html><html data-theme="auto"><body><div id="app"></div></body></html>', { url: "http://pravaha.test/ui/reader.html", pretendToBeVisual: true });
   const win = dom.window; win.HTMLElement.prototype.scrollIntoView = () => {}; win.matchMedia = () => ({ matches: false, addEventListener() {} }); if (fontProbe) win.document.fonts = { load: async (spec) => fontProbe(spec) };
   const ios = []; win.IntersectionObserver = class { constructor(cb) { this.cb = cb; this.els = new Set(); ios.push(this); } observe(e) { this.els.add(e); } disconnect() { this.els.clear(); } };
@@ -28,7 +28,7 @@ async function mount({ prep, noToken = false, prefs = null, fontProbe = null, ar
   await import(`../extension/ui/reader.js?run=${++n}`); await wait(120);
   const $ = (s) => win.document.querySelector(s); const $$ = (s) => [...win.document.querySelectorAll(s)];
   const key = (k, o = {}) => win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: k, bubbles: true, ...o }));
-  return { w, engine, win, area, $, $$, key, opened, ios, perms, close: () => win.close() };
+  return { w, engine, win, area, handlers, $, $$, key, opened, ios, perms, close: () => win.close() };
 }
 const rowByTitle = (t, text) => t.$$(".row").find(r => r.querySelector(".rtitle").textContent.includes(text));
 
@@ -204,13 +204,43 @@ test("search finds an article whose reading copy has expired, and opening it fet
   typeInto(t, ".search input", "fiscal deficit"); await wait(420); const row = rowByTitle(t, "Fiscal deficit"); assert.ok(row, "found in the index"); assert.ok(row.querySelector(".chip.idx"), "marked as archive");
   row.querySelector(".rtitle").click(); await wait(250); assert.ok(row.querySelector(".card"), "the card opens after the article is fetched again"); assert.equal(row.querySelector(".chip.idx"), null); assert.ok(t.engine.cache.items[4]); t.close();
 });
-test("folders and feeds can be reordered from the sidebar and the article list follows", async () => {
-  const t = await mount(); const order = () => t.$$(".side .trow .lbl").map(e => e.textContent).filter(x => x !== "All articles");
-  assert.equal(t.$(".mv"), null, "no arrows until reorder mode"); t.$("[data-act='reorder']").click(); await wait(30); assert.ok(t.$(".mv")); assert.match(t.$(".toast").textContent, /Reorder mode/);
-  assert.equal(t.$(".trow[data-id='cat:Defence'] [data-mv='up']").disabled, true, "the first cannot go up"); assert.equal(t.$(".trow[data-id='cat:Food'] [data-mv='down']").disabled, true);
-  t.$(".trow[data-id='cat:Food'] [data-mv='up']").click(); await wait(100); assert.deepEqual(order().slice(0, 3), ["Food", "Broken Feed", "Kitchen Daily"]);
-  await wait(700); assert.deepEqual(t.$$(".ghead .gtitle").map(e => e.textContent), ["Broken Feed", "Kitchen Daily", "Naval Wire"], "the list follows the sidebar");
-  t.$("[data-act='reorder']").click(); await wait(30); assert.equal(t.$(".mv"), null); assert.equal(t.engine.settings.treeOrder.root[0], "cat:Food"); t.close();
+const labels = (t) => t.$$(".side .trow .lbl").map(e => e.textContent).filter(x => x !== "All articles");
+const ctx = (t, sel) => t.$(sel).dispatchEvent(new t.win.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }));
+test("folders: no arrows or reorder mode, a grab cursor on top-level folders, and a note that feeds are ordered in Miniflux", async () => {
+  const t = await mount(); assert.equal(t.$("[data-act='reorder']"), null); assert.equal(t.$(".mv"), null);
+  assert.equal(t.$(".trow[data-id='cat:Food']").dataset.grab, "true"); assert.equal(t.$(".trow[data-id='feed:2']").dataset.grab, undefined, "feeds are not draggable"); assert.equal(t.$(".trow[data-id='cat:Defence/Shipbuilding']").dataset.grab, undefined, "nor are nested folders");
+  const note = t.$(".sidenote"); assert.match(note.textContent, /alphabetically/); assert.match(note.textContent, /Miniflux/); assert.match(note.querySelector("a").href, /\/feeds$/); assert.equal(note.querySelector("a").rel, "noopener noreferrer"); t.close();
+});
+test("right-click on a folder moves it with the menu, the list follows, and the keyboard does the same with Alt and the arrows", async () => {
+  const t = await mount(); assert.deepEqual(labels(t).slice(0, 2), ["Defence", "Shipbuilding"]);
+  ctx(t, ".trow[data-id='cat:Food']"); assert.ok(t.$(".ctxmenu")); assert.equal(t.$("[data-act='move-down']").disabled, true, "the last cannot go down"); assert.equal(t.$("[data-act='move-up']").disabled, false);
+  t.$("[data-act='move-up']").click(); await wait(100); assert.equal(t.$(".ctxmenu"), null, "the menu closes"); assert.deepEqual(labels(t).slice(0, 3), ["Food", "Broken Feed", "Kitchen Daily"]);
+  await wait(700); assert.deepEqual(t.$$(".ghead .gtitle").map(e => e.textContent), ["Broken Feed", "Kitchen Daily", "Naval Wire"], "the article list follows the sidebar"); assert.equal(t.engine.settings.treeOrder.root[0], "cat:Food");
+  ctx(t, ".trow[data-id='cat:Defence']"); assert.equal(t.$("[data-act='move-up']").disabled, false); t.$("[data-act='move-up']").dispatchEvent(new t.win.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); assert.equal(t.$(".ctxmenu"), null, "Esc closes the menu");
+  ctx(t, ".trow[data-id='feed:2']"); assert.equal(t.$("[data-act='move-up']"), null, "feeds have no move items"); assert.ok(t.$("[data-act='mark-read']")); t.win.document.dispatchEvent(new t.win.MouseEvent("pointerdown", { bubbles: true })); assert.equal(t.$(".ctxmenu"), null, "a click elsewhere closes it");
+  t.$(".trow[data-id='cat:Defence'] .tbtn").dispatchEvent(new t.win.KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true })); await wait(100); assert.equal(labels(t)[0], "Defence", "already first, nothing changes");
+  t.$(".trow[data-id='cat:Food'] .tbtn").dispatchEvent(new t.win.KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true })); await wait(100); assert.deepEqual(labels(t).slice(0, 2), ["Defence", "Shipbuilding"], "Alt+Down moved Food back below Defence"); t.close();
+});
+test("right-click Mark all read asks first, marks every unread article in the folder, and can be undone", async () => {
+  const t = await mount(); const before = t.engine.tree().find(n => n.id === "cat:Food").unread; assert.ok(before > 0);
+  ctx(t, ".trow[data-id='cat:Food']"); assert.match(t.$("[data-act='mark-read']").textContent, new RegExp(String(before))); t.$("[data-act='mark-read']").click(); await wait(40);
+  assert.ok(t.$(".dialog[aria-label='Mark as read?']")); assert.match(t.$(".dialog p").textContent, /“Food”/); t.$("[data-act='cancel']").click(); await wait(30); assert.equal(t.engine.tree().find(n => n.id === "cat:Food").unread, before, "cancel changes nothing");
+  ctx(t, ".trow[data-id='cat:Food']"); t.$("[data-act='mark-read']").click(); await wait(40); t.$("[data-act='confirm']").click(); await wait(500);
+  assert.equal(t.engine.tree().find(n => n.id === "cat:Food").unread, 0); assert.match(t.$(".toast").textContent, /Marked \d+ articles? read/); assert.ok(t.$(".toast button"), "Undo is offered");
+  ctx(t, ".trow[data-id='cat:Food']"); assert.equal(t.$("[data-act='mark-read']").disabled, true, "nothing left to mark"); t.win.document.dispatchEvent(new t.win.MouseEvent("pointerdown", { bubbles: true }));
+  ctx(t, ".trow[data-id='all']"); assert.ok(t.$("[data-act='mark-read']")); assert.equal(t.$("[data-act='move-up']"), null, "All articles cannot be moved"); t.close();
+});
+test("dragging a top-level folder shows a drop line, writes the new order on release, and a short move is only a click", async () => {
+  const t = await mount(); const rows = t.$$(".side .trow[data-id]"); rows.forEach((r, i) => { r.getBoundingClientRect = () => ({ top: i * 30, bottom: i * 30 + 28, left: 0, right: 200, width: 200, height: 28 }); });
+  const side = t.$(".side"); side.getBoundingClientRect = () => ({ top: 0, bottom: 800, left: 0, right: 220, width: 220, height: 800 });
+  const ev = (type, y, x = 20) => new t.win.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y });
+  const grab = t.$(".trow[data-id='cat:Food'] .tbtn"); const foodIdx = rows.findIndex(r => r.dataset.id === "cat:Food"), defIdx = rows.findIndex(r => r.dataset.id === "cat:Defence");
+  grab.dispatchEvent(ev("pointerdown", foodIdx * 30 + 10)); t.win.document.dispatchEvent(ev("pointermove", foodIdx * 30 + 12)); assert.equal(t.$(".dropline"), null, "under 6 pixels is still a click"); t.win.document.dispatchEvent(ev("pointerup", foodIdx * 30 + 12)); assert.equal(labels(t)[0], "Defence");
+  grab.dispatchEvent(ev("pointerdown", foodIdx * 30 + 10)); t.win.document.dispatchEvent(ev("pointermove", defIdx * 30 + 2)); assert.ok(t.$(".dropline"), "the drop line shows"); assert.ok(t.win.document.body.classList.contains("dragging-folder"), "the grabbing cursor class is on"); assert.ok(t.$(".trow.lift"));
+  t.win.document.dispatchEvent(ev("pointerup", defIdx * 30 + 2)); await wait(120); assert.equal(t.$(".dropline"), null); assert.equal(t.win.document.body.classList.contains("dragging-folder"), false);
+  assert.deepEqual(labels(t).slice(0, 3), ["Food", "Broken Feed", "Kitchen Daily"], "Food now sits first"); assert.equal(t.engine.settings.treeOrder.root[0], "cat:Food"); assert.ok(t.engine.log.list().some(e => e.type === "order"));
+  const g2 = t.$(".trow[data-id='cat:Food'] .tbtn"); g2.dispatchEvent(ev("pointerdown", 10)); t.win.document.dispatchEvent(ev("pointermove", 200)); t.win.document.dispatchEvent(new t.win.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await wait(50);
+  assert.equal(t.$(".dropline"), null, "Esc cancels a drag"); assert.equal(labels(t)[0], "Food", "and changes nothing"); t.close();
 });
 test("Add feed: find feeds on a page, pick one, choose a folder, subscribe, and it appears", async () => {
   const t = await mount({ prep: (w) => { w.mf.st.discover["https://blog.example"] = [{ url: "https://blog.example/feed.xml", title: "The Blog", type: "atom" }, { url: "https://blog.example/comments.xml", title: "Comments", type: "rss" }]; } });
@@ -329,4 +359,21 @@ test("Move setup: setup text can be copied and pasted into another machine, with
   const box = u.$("[data-imp='paste']"); box.value = copied; box.dispatchEvent(new u.win.Event("input", { bubbles: true })); await wait(80);
   const ip = u.$("[data-imp='pass']"); assert.ok(ip, "a passphrase box appears for pasted text with keys"); ip.value = "pw1"; ip.dispatchEvent(new u.win.Event("input", { bubbles: true }));
   u.$("[data-act='import']").click(); await wait(500); assert.equal(u.engine.settings.miniflux.token, "good-key"); t.close(); u.close();
+});
+test("Settings: the feed detection switch explains first, then asks Firefox, and declining changes nothing", async () => {
+  const dstate = { granted: false, registered: false }; const detect = { state: async () => ({ ...dstate, on: dstate.granted && dstate.registered }), enable: async () => { dstate.registered = dstate.granted; return { ...dstate, on: dstate.granted, ok: dstate.granted }; }, disable: async () => { dstate.granted = dstate.registered = false; return { ...dstate, on: false, ok: true }; }, get: async () => [] };
+  const t = await mount({ detect }); t.$(".tab[data-tab='settings'], .tab:nth-child(5)").click(); await wait(60);
+  [...t.$$(".stab")].find(b => /This machine/.test(b.textContent)).click(); await wait(80);
+  const sw = t.$("[data-act='detect-feeds']"); assert.ok(sw); assert.equal(sw.getAttribute("aria-checked"), "false"); assert.equal(sw.getAttribute("role"), "switch");
+  sw.click(); await wait(40); const dlg = t.$(".dialog[aria-label='Detect feeds on pages?']"); assert.ok(dlg, "Pravaha's own explanation comes first"); assert.equal(t.perms.requested.length, 0, "Firefox has not been asked yet");
+  assert.match(dlg.textContent, /Access your data for all websites/); assert.match(dlg.textContent, /feed links in the page’s head/); assert.match(dlg.textContent, /right-click, Subscribe with Pravaha, keeps working/);
+  t.$("[data-act='cancel']").click(); await wait(60); assert.equal(t.perms.requested.length, 0); assert.equal(t.$("[data-act='detect-feeds']").getAttribute("aria-checked"), "false"); assert.match(t.$("[data-note='detect']").textContent, /stays off/);
+  t.$("[data-act='detect-feeds']").click(); await wait(40); dstate.granted = true; t.$("[data-act='confirm']").click(); await wait(120);
+  assert.deepEqual(t.perms.requested[0].origins, ["https://*/*", "http://*/*"]); assert.equal(t.$("[data-act='detect-feeds']").getAttribute("aria-checked"), "true"); assert.match(t.$("[data-note='detect']").textContent, /is on/);
+  t.$("[data-act='detect-feeds']").click(); await wait(100); assert.equal(t.$("[data-act='detect-feeds']").getAttribute("aria-checked"), "false"); assert.equal(dstate.granted, false, "turning off gives the permission back"); t.close();
+});
+test("the popup lists the page's feeds and subscribing opens the Add feed dialog with that address", async () => {
+  const detect = { state: async () => ({ on: true }), get: async () => [{ url: "https://blog.example/feed.xml", title: "The Blog", type: "atom" }] };
+  const t = await mount({ detect }); assert.deepEqual(await t.handlers.feedsFor({ tabId: 5 }), [{ url: "https://blog.example/feed.xml", title: "The Blog", type: "atom" }]);
+  assert.deepEqual(await t.handlers.openSubscribe({ url: "javascript:alert(1)" }), { ok: false }); assert.deepEqual(await t.handlers.openSubscribe({ url: "https://blog.example/feed.xml" }), { ok: true }); assert.ok(t.opened.includes("subscribe:https://blog.example/feed.xml")); t.close();
 });

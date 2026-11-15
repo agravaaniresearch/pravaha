@@ -23,16 +23,17 @@ One JSON object per line.
 | `eid` | `device:seq`, unique and the merge key |
 | `device` | Machine name |
 | `ts` | Hybrid logical clock: 14 digit wall time in milliseconds, 5 digit counter, device name, joined by dots. Sorts as plain text |
-| `type` | `open`, `card`, `dwell`, `dismiss`, `undismiss`, `save`, `unsave`, `read_no_open`, `train`, `calibration` |
+| `type` | `open`, `card`, `dwell`, `dismiss`, `undismiss`, `save`, `unsave`, `read_no_open`, `train`, `calibration`, `order` (from 0.5.0) |
 | `entry` | Miniflux entry id, when the event is about an article |
 | `feed` | Miniflux feed id |
 | `card` | An article was read as an in-reader card. Logged once per article per session. Adds 0.05 to the feed's standing and a 0.02 pull on the interest profile, against 0.15 and 0.05 for `open` (a background tab) |
-| `payload` | Type specific. `dwell`: `{ms}`. `open` and `save`: `{terms, score}` so the interest profile replays identically. `train`: `{type, key, value}` |
+| `payload` | Type specific. `dwell`: `{ms}`. `open` and `save`: `{terms, score}` so the interest profile replays identically. `train`: `{type, key, value}`. `order`: `{scope, ids}` |
 
 Rules that make merging safe:
 
 - Merge is a set union by `eid`. Duplicates are ignored. Invalid lines are counted and skipped.
 - Derived state is a pure function of the sorted event list and the current time. Same events, same result.
+- `order` records the full order of the top-level folders after a drag or a Move up/down. `scope` is `"root"` (the only scope written by 0.5.0), `ids` is the ordered list of folder ids such as `cat:Defence`, followed by the ids of anything else at that level. The event with the latest `ts` for a scope wins. A machine uses the event order only when the event's wall time is later than `settings.treeOrderAt`, the time of the last order change made or received through Firefox Sync, so the two routes cannot disagree for long. Feeds are never reordered by Pravaha; their order is set in Miniflux. Versions before 0.5.0 count an `order` line as an invalid line, so update every machine.
 - `undismiss` and `unsave` undo the matching earlier event. A later `train` for the same type and key replaces an earlier one, and value 0 removes the rule.
 
 ## Derived state
@@ -96,6 +97,7 @@ Bundled fonts: OFL, except Ubuntu (Ubuntu Font Licence 1.0); licences are in `ex
 
 - `installId`: random 12 characters made on first start. The state file `state/<machine>.json` carries it as `installId`. If a sync finds the state file of the same machine name with a different `installId`, nothing is written and the sync stops with `code: "name-clash"`; `status().nameClash` is `{device, since}`.
 - `device` default is `browser-xxxxx` (random). The old default `this-machine` is renamed only while nothing has been written under it.
+- `treeOrderAt`: milliseconds of the last folder-order change on this machine or taken from Firefox Sync; compared with `order` events as described above.
 - `sync`: `{keys: bool, settings: bool}`, both default true, local to the machine, never carried.
 - `syncMeta`: `{ "<part>": {at, hash} }`, what was last sent or taken for each part. Local only.
 - `ui`: the look-and-feel preferences, as above.

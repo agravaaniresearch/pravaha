@@ -34,7 +34,7 @@ export function partsFor(patch) {
   if (SETTING_FIELDS.some(f => patch[f] !== undefined)) parts.push("settings"); if (patch.treeOrder !== undefined) parts.push("order"); if (patch.ui !== undefined) parts.push("ui");
   return parts;
 }
-export function makeHandlers({ engine, fetchImpl, runSync, schedule, openTab, profile }) {
+export function makeHandlers({ engine, fetchImpl, runSync, schedule, openTab, profile, detect, openSubscribe }) {
   const share = async (parts, opts) => { if (!profile) return null; try { return await profile.push(parts, opts); } catch { return null; } };
   return {
   boot: async () => ({ settings: engine.settings, tree: engine.tree(), status: engine.status(), rules: engine.trainingRules(), icons: engine.icons }),
@@ -54,6 +54,12 @@ export function makeHandlers({ engine, fetchImpl, runSync, schedule, openTab, pr
   categories: () => engine.categoryList(),
   discover: (m) => engine.discover(m.url),
   subscribe: (m) => engine.subscribe({ feedUrl: m.feedUrl, categoryId: m.categoryId, newCategory: m.newCategory }),
+  feedDetectState: async () => (detect ? detect.state() : { granted: false, registered: false, on: false, unavailable: true }),
+  feedDetectOn: async () => (detect ? detect.enable() : { ok: false, sentence: "Feed detection is not available here." }),
+  feedDetectOff: async () => (detect ? detect.disable() : { ok: true }),
+  feedsFor: async (m) => (detect ? detect.get(Number(m.tabId)) : []),
+  openSubscribe: async (m) => { const u = String(m.url || ""); if (!openSubscribe || !/^https?:\/\//i.test(u)) return { ok: false }; await openSubscribe(u); return { ok: true }; },
+  reorderFolders: async (m) => { const moved = await engine.setOrder(Array.isArray(m.ids) ? m.ids : []); if (moved) await share(["order"]); return { moved, tree: engine.tree() }; },
   moveNode: async (m) => { const moved = await engine.moveNode(m.id, m.dir === "up" ? "up" : "down"); if (moved) await share(["order"]); return { moved, tree: engine.tree() }; },
   open: async (m) => { const r = await engine.open(m.id); if (!r) return null; await openTab(r, m.id); return true; },
   save: (m) => engine.toggleSave(m.id),

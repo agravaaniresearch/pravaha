@@ -3,7 +3,7 @@
 import { tokenize, domainOf, firstParagraph, wordCount } from "./text.js";
 import { Corpus, cosine, blend, mean, prune, topTerms } from "./vector.js";
 import { scoreItem, DEFAULT_WEIGHTS, normaliseWeights, whyRanked, authorityOf } from "./scoring.js";
-import { EventLog, Clock, derive } from "./eventlog.js";
+import { EventLog, Clock, derive, parseTs } from "./eventlog.js";
 import { Syncer, freshSyncState } from "./sync.js";
 import { WebDav, PlainError } from "./webdav.js";
 import { Miniflux, feedHealth, splitCategory } from "./miniflux.js";
@@ -18,7 +18,7 @@ export const DEFAULT_SETTINGS = {
   device: "", miniflux: { url: "https://reader.miniflux.app", token: "" },
   webdav: { url: "https://myfiles.fastmail.com", user: "", pass: "", root: "pravaha" },
   raindrop: { token: "" }, weights: { ...DEFAULT_WEIGHTS }, pollMinutes: 2, novelty: true,
-  palette: "ember", theme: "light", sync: { keys: true, settings: true }, syncMeta: {}, ui: null, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: true, treeOrder: {}, searchKeepDays: 400
+  palette: "ember", theme: "light", sync: { keys: true, settings: true }, syncMeta: {}, ui: null, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: true, treeOrder: {}, treeOrderAt: 0, searchKeepDays: 400
 };
 const DAY = 86400000;
 const randomId = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => "abcdefghjkmnpqrstuvwxyz23456789"[b % 31]).join("");
@@ -350,7 +350,10 @@ export class Engine {
     }
     // Siblings follow the order the reader saved, then the alphabet. Folders come before feeds within a parent.
     const kids = new Map(); for (const n of nodes.values()) { const k = n.parent || "root"; if (!kids.has(k)) kids.set(k, []); kids.get(k).push(n); }
-    const saved = this.settings.treeOrder || {}; const out = [];
+    // The order from the history log wins when it is newer than the last change made here or taken from Firefox Sync.
+    const saved = { ...(this.settings.treeOrder || {}) }; const at = this.settings.treeOrderAt || 0;
+    for (const [k, v] of Object.entries(d.order || {})) if (v.wall > at) saved[k] = v.ids;
+    const out = [];
     const walk = (key) => {
       const list = kids.get(key) || []; const ord = Array.isArray(saved[key]) ? saved[key] : [];
       const rank = (n) => { const i = ord.indexOf(n.id); return i < 0 ? 1e6 : i; };
@@ -359,15 +362,20 @@ export class Engine {
     };
     walk("root"); return out;
   }
-  // Move a folder or feed one place up or down among its siblings of the same kind.
+  // Only top-level folders are reordered here (feeds are ordered in Miniflux). The order is saved in settings, for Firefox Sync,
+  // and written to the history log, so it arrives with the bulk transfer too.
+  async setOrder(ids) {
+    const t = this.tree(); const top = t.filter(x => !x.parent); const folders = top.filter(x => x.type === "folder").map(x => x.id);
+    const want = [...new Set((ids || []).map(String))].filter(x => folders.includes(x)); if (!want.length) return false;
+    const merged = [...want, ...top.map(x => x.id).filter(x => !want.includes(x))];
+    if (JSON.stringify(merged) === JSON.stringify(top.map(x => x.id))) return false;
+    const e = this.log.append("order", { payload: { scope: "root", ids: merged } }); this._derived = null;
+    await this.saveSettings({ treeOrder: { ...(this.settings.treeOrder || {}), root: merged }, treeOrderAt: parseTs(e.ts).wall }); return true;
+  }
   async moveNode(id, dir) {
-    const t = this.tree(); const n = t.find(x => x.id === id); if (!n) return false;
-    const sib = t.filter(x => (x.parent || "root") === (n.parent || "root") && x.type === n.type).map(x => x.id);
-    const i = sib.indexOf(id), j = i + (dir === "up" ? -1 : 1); if (i < 0 || j < 0 || j >= sib.length) return false;
-    [sib[i], sib[j]] = [sib[j], sib[i]];
-    const key = n.parent || "root"; const all = t.filter(x => (x.parent || "root") === key).map(x => x.id);
-    const merged = [...sib, ...all.filter(x => !sib.includes(x))];
-    await this.saveSettings({ treeOrder: { ...(this.settings.treeOrder || {}), [key]: merged } }); return true;
+    const t = this.tree(); const n = t.find(x => x.id === id); if (!n || n.type !== "folder" || n.parent) return false;
+    const sib = t.filter(x => !x.parent && x.type === "folder").map(x => x.id); const i = sib.indexOf(id), j = i + (dir === "up" ? -1 : 1);
+    if (i < 0 || j < 0 || j >= sib.length) return false; [sib[i], sib[j]] = [sib[j], sib[i]]; return this.setOrder(sib);
   }
   unreadCount() { const d = this._derive(); return Object.values(this.cache.items).filter(i => i.status === "unread" && !d.dismissed.has(i.id)).length; }
   _rowOf(it, ctx, dead, pend) {

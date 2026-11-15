@@ -27,7 +27,7 @@ export class Clock {
   }
 }
 
-export const EVENT_TYPES = new Set(["open", "card", "dwell", "dismiss", "undismiss", "save", "unsave", "read_no_open", "train", "calibration"]);
+export const EVENT_TYPES = new Set(["open", "card", "dwell", "dismiss", "undismiss", "save", "unsave", "read_no_open", "train", "calibration", "order"]);
 
 export function validEvent(e) {
   return e && typeof e === "object" && typeof e.eid === "string" && typeof e.ts === "string" &&
@@ -79,7 +79,7 @@ export function parseSegment(text) {
 // Replay the whole log into derived state. Deterministic: same events, same result.
 export function derive(events, now) {
   const cards = new Map(), dismissed = new Map(), saved = new Map(), opens = new Map(), dwell = new Map(), trainMap = new Map();
-  const authority = new Map(); const pulls = [];
+  const authority = new Map(); const pulls = []; const orders = new Map();
   const bump = (feed, d, ts) => {
     if (feed === undefined || feed === null) return;
     const k = String(feed); const age = Math.max(0, now - parseTs(ts).wall);
@@ -110,6 +110,7 @@ export function derive(events, now) {
         if (p.terms) pulls.push({ kind: "save", terms: p.terms });
         break;
       case "unsave": saved.set(e.entry, false); bump(e.feed, -AUTHORITY_SIGNALS.save, e.ts); break;
+      case "order": if (typeof p.scope === "string" && Array.isArray(p.ids)) orders.set(p.scope, { ids: p.ids.map(String), wall: parseTs(e.ts).wall }); break;
       case "train": trainMap.set(`${p.type}:${p.key}`, { type: p.type, key: p.key, value: p.value }); break;
     }
   }
@@ -117,6 +118,6 @@ export function derive(events, now) {
   return {
     dismissed: new Set([...dismissed].filter(([, v]) => v).map(([k]) => k)),
     saved: new Set([...saved].filter(([, v]) => v).map(([k]) => k)),
-    opens, cards, dwell, authorityDelta: Object.fromEntries(authority), training, pulls
+    opens, cards, dwell, authorityDelta: Object.fromEntries(authority), training, pulls, order: Object.fromEntries(orders)
   };
 }

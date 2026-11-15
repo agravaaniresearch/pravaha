@@ -19,7 +19,7 @@ export const S = {
   settings: null, tree: [], status: null, rules: [], data: null, icons: {}, iconCount: 0, unread: 0,
   rows: new Map(), openCard: null, selId: null, keep: new Set(), content: {}, tags: {}, limits: {},
   collapsed: new Set(lsGet("pravaha.collapsed", [])), auto: new Set(), treeCollapsed: new Set(lsGet("pravaha.treeCollapsed", [])),
-  newIds: new Set(), pop: null, help: false, toast: "", busy: false, stats: null, searchIn: "all", reorder: false, dialog: null, syncFlash: 0,
+  newIds: new Set(), pop: null, help: false, toast: "", busy: false, stats: null, searchIn: "all", moved: null, dialog: null, syncFlash: 0,
   stab: "connections", draft: null, tests: {}, dirty: false
 };
 let U = loadPrefs();
@@ -178,9 +178,38 @@ function askConfirm({ title, body, confirmLabel = "OK", cancelLabel = "Cancel" }
     S.dialog = "confirm"; const done = (v) => { closeDialog(); resolve(v); }; S.dialogCancel = () => done(false);
     const ok = h("button", { class: "btn primary", "data-act": "confirm", onclick: () => done(true) }, confirmLabel);
     dialogHost().replaceChildren(h("div", { class: "overlay", onclick: () => done(false) }, h("div", { class: "dialog narrow", role: "alertdialog", "aria-label": title, onclick: (e) => e.stopPropagation() },
-      h("h2", {}, title), h("p", {}, body), h("div", { class: "dfoot" }, h("button", { class: "btn", "data-act": "cancel", onclick: () => done(false) }, cancelLabel), ok))));
+      h("h2", {}, title), ...[].concat(body).map(t => h("p", {}, t)), h("div", { class: "dfoot" }, h("button", { class: "btn", "data-act": "cancel", onclick: () => done(false) }, cancelLabel), ok))));
     ok.focus();
   });
+}
+// Feed detection needs Firefox's all-websites permission, so Pravaha explains it first in its own words. Firefox then shows its own prompt.
+const ALL_SITES = ["https://*/*", "http://*/*"];
+async function loadDetect() { try { S.detect = await send({ type: "feedDetectState" }); } catch { S.detect = { on: false, unavailable: true }; } if (S.tab === "settings" && S.stab === "machine") renderMain(); }
+async function toggleDetect() {
+  const st = S.detect || {}; if (st.unavailable || S.detectBusy) return; S.detectBusy = true; S.detectMsg = ""; renderMain();
+  try {
+    if (st.on) { S.detect = await send({ type: "feedDetectOff" }); S.detectMsg = "Feed detection is off. Right-click Subscribe with Pravaha still works."; }
+    else {
+      const go = await askConfirm({ title: "Detect feeds on pages?", confirmLabel: "Continue to Firefox’s question", cancelLabel: "Not now", body: [
+        "Pravaha can colour its toolbar icon on pages that offer a feed, so you can subscribe in one click. To do that, Firefox has to let Pravaha run a small script on web pages. Firefox words this as “Access your data for all websites”, and that wording is Firefox’s, not ours.",
+        "The script reads one thing: the feed links in the page’s head. It hands those addresses to Pravaha inside your browser. It does not read the page text, forms or cookies, and nothing is sent anywhere.",
+        "You can turn this off here at any time. If you say no, nothing changes: right-click, Subscribe with Pravaha, keeps working on any page or link."] });
+      if (!go) S.detectMsg = "Feed detection stays off.";
+      else {
+        const ok = await browser.permissions.request({ origins: ALL_SITES });
+        if (!ok) S.detectMsg = "Firefox did not grant it, so detection stays off. Right-click Subscribe with Pravaha still works.";
+        else { S.detect = await send({ type: "feedDetectOn" }); S.detectMsg = S.detect.on ? "Feed detection is on. Pages you open from now on are checked; ones already open are not." : (S.detect.sentence || "Feed detection could not be turned on."); }
+      }
+    }
+  } catch { S.detectMsg = "Something went wrong, and feed detection was left as it was."; await loadDetect(); }
+  S.detectBusy = false; renderMain();
+}
+function detectPanel() {
+  const st = S.detect; if (!st) loadDetect(); const on = !!(st && st.on);
+  return h("div", { class: "panel", "data-panel": "detect" }, h("h2", {}, "Feeds on web pages"),
+    h("div", { class: "switchrow" }, h("button", { class: "switch", role: "switch", "data-act": "detect-feeds", "aria-checked": String(on), "aria-label": "Detect feeds on pages", disabled: !st || st.unavailable || S.detectBusy ? true : null, onclick: toggleDetect }, h("i", {})),
+      h("div", {}, h("b", {}, "Detect feeds on pages"), h("span", { class: "sub" }, on ? "On. The toolbar icon turns amber on pages that offer a feed." : "Off. The toolbar icon stays as it is."))),
+    h("p", { class: "note", "aria-live": "polite", "data-note": "detect" }, st && st.unavailable ? "Feed detection is not available in this browser." : S.detectMsg || "Turning it on asks Firefox for permission to run on all websites. Right-click Subscribe with Pravaha works without it."));
 }
 const confirmIf = (kind, body) => { const m = U.confirmRead; return m === "never" || (m === "bulk" && kind === "single") ? Promise.resolve(true) : askConfirm({ title: "Mark as read?", body, confirmLabel: "Mark read" }); };
 
@@ -498,29 +527,100 @@ function topBar() {
     h("button", { class: "ibtn", title: "Keyboard shortcuts (?)", "aria-label": "Keyboard shortcuts", onclick: () => { S.help = true; renderOverlay(); } }, icon("help")),
     pillEl());
 }
+const isTopFolder = (n) => !!n && n.type === "folder" && !n.parent;
 function sideBar() {
   const byId = new Map(S.tree.map(n => [n.id, n]));
   const hidden = (n) => { for (let p = n.parent && byId.get(n.parent); p; p = p.parent && byId.get(p.parent)) if (S.treeCollapsed.has(p.id)) return true; return false; };
   const hasKids = (n) => S.tree.some(x => x.parent === n.id);
+  const open = (id) => { S.scope = id; if (S.tab !== "feed") { S.tab = "feed"; lsSet("pravaha.tab", "feed"); } S.keep = new Set(); loadView(); };
   const rows = S.tree.filter(n => !hidden(n)).map(n => {
     const chev = n.type === "folder" && hasKids(n) ? h("button", { class: "chev", "aria-label": (S.treeCollapsed.has(n.id) ? "Expand " : "Collapse ") + n.label, "aria-expanded": String(!S.treeCollapsed.has(n.id)), onclick: () => { S.treeCollapsed.has(n.id) ? S.treeCollapsed.delete(n.id) : S.treeCollapsed.add(n.id); lsSet("pravaha.treeCollapsed", [...S.treeCollapsed]); renderChrome(); } }, icon("chev", 14)) : h("span", { class: "chev" });
-    const cur = S.tab === "feed" && S.scope === n.id;
-    const mv = S.reorder ? h("span", { class: "mv" },
-      h("button", { title: "Move up", "aria-label": "Move " + n.label + " up", "data-mv": "up", disabled: n.first ? true : null, onclick: () => moveNode(n.id, "up") }, icon("up", 14)),
-      h("button", { title: "Move down", "aria-label": "Move " + n.label + " down", "data-mv": "down", disabled: n.last ? true : null, onclick: () => moveNode(n.id, "down") }, icon("down", 14))) : null;
-    return h("div", { class: "trow", "data-id": n.id, style: { paddingLeft: n.depth * 14 + "px" } }, chev, h("button", { class: "tbtn", "aria-current": cur ? "true" : null, onclick: () => { S.scope = n.id; if (S.tab !== "feed") { S.tab = "feed"; lsSet("pravaha.tab", "feed"); } S.keep = new Set(); loadView(); } },
-      n.type === "feed" ? iconFor(Number(n.id.slice(5)), n.label) : null, h("span", { class: "lbl" }, n.label), n.state && n.state !== "green" ? h("span", { class: "dot " + n.state, title: "This feed has trouble in Miniflux" }) : null, n.unread ? h("span", { class: "n" }, n.unread) : null), mv);
+    const cur = S.tab === "feed" && S.scope === n.id; const top = isTopFolder(n);
+    const row = h("div", { class: "trow" + (S.moved === n.id ? " dropped" : ""), "data-id": n.id, "data-grab": top ? "true" : null, style: { paddingLeft: n.depth * 14 + "px" }, oncontextmenu: (e) => openCtx(e, n.id) }, chev,
+      h("button", { class: "tbtn", "aria-current": cur ? "true" : null, "aria-keyshortcuts": top ? "Alt+ArrowUp Alt+ArrowDown" : null, title: top ? "Drag to move this folder. Right-click for more." : null,
+        onclick: () => open(n.id), onkeydown: top ? (e) => { if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); moveNode(n.id, e.key === "ArrowUp" ? "up" : "down", true); } } : null,
+        onpointerdown: top ? (e) => startDrag(e, n, row) : null },
+        n.type === "feed" ? iconFor(Number(n.id.slice(5)), n.label) : null, h("span", { class: "lbl" }, n.label), n.state && n.state !== "green" ? h("span", { class: "dot " + n.state, title: "This feed has trouble in Miniflux" }) : null, n.unread ? h("span", { class: "n" }, n.unread) : null));
+    return row;
   });
-  return h("aside", { class: "side", "aria-label": "Folders and feeds", data: { reorder: String(S.reorder) } },
-    h("div", { class: "sidehead" }, h("span", { class: "grow" }, S.reorder ? "Reordering" : "Folders"),
-      h("button", { class: "ibtn", "data-act": "addfeed", title: "Add a feed from a website (a)", "aria-label": "Add a feed", onclick: () => openAddFeed() }, icon("plus", 18)),
-      h("button", { class: "ibtn" + (S.reorder ? " on" : ""), "data-act": "reorder", title: S.reorder ? "Finish reordering" : "Reorder folders and feeds", "aria-label": S.reorder ? "Finish reordering" : "Reorder folders and feeds", "aria-pressed": String(S.reorder), onclick: toggleReorder }, icon("swap", 17))),
-    h("div", { class: "trow" }, h("span", { class: "chev" }), h("button", { class: "tbtn", "aria-current": S.tab === "feed" && S.scope === "all" ? "true" : null, onclick: () => { S.scope = "all"; S.tab = "feed"; lsSet("pravaha.tab", "feed"); S.keep = new Set(); loadView(); } }, icon("list", 16), h("span", { class: "lbl" }, "All articles"), S.unread ? h("span", { class: "n" }, S.unread) : null)),
-    rows);
+  const base = String((S.settings && S.settings.miniflux && S.settings.miniflux.url) || "").replace(/\/+$/, "");
+  return h("aside", { class: "side", "aria-label": "Folders and feeds" },
+    h("div", { class: "sidehead" }, h("span", { class: "grow" }, "Folders"),
+      h("button", { class: "ibtn", "data-act": "addfeed", title: "Add a feed from a website (a)", "aria-label": "Add a feed", onclick: () => openAddFeed() }, icon("plus", 18))),
+    h("div", { class: "trow", "data-id": "all", oncontextmenu: (e) => openCtx(e, "all") }, h("span", { class: "chev" }), h("button", { class: "tbtn", "aria-current": S.tab === "feed" && S.scope === "all" ? "true" : null, onclick: () => open("all") }, icon("list", 16), h("span", { class: "lbl" }, "All articles"), S.unread ? h("span", { class: "n" }, S.unread) : null)),
+    rows,
+    h("p", { class: "sidenote", "data-note": "feed-order" }, "Drag a folder to move it, or press Alt with the up and down arrows. Feeds are listed alphabetically inside each folder; their names and folders are set in ",
+      base ? h("a", { href: base + "/feeds", target: "_blank", rel: "noopener noreferrer" }, "Miniflux") : "Miniflux", "."));
 }
 const reloadGroups = debounce(() => { if (isFeedTab()) loadView(); }, 500);
-async function moveNode(id, dir) { const r = await send({ type: "moveNode", id, dir }); if (r && r.tree) { S.tree = r.tree; renderChrome(); if (r.moved) reloadGroups(); } }
-function toggleReorder() { S.reorder = !S.reorder; renderChrome(); if (S.reorder) toast("Reorder mode. Use the arrows beside a folder or feed, then press the button again to finish.", { kind: "info" }); }
+const focusNode = (id) => [...document.querySelectorAll(".side .trow[data-id]")].find(r => r.dataset.id === id)?.querySelector(".tbtn")?.focus();
+async function applyOrder(r) { if (r && r.tree) { S.tree = r.tree; renderChrome(); if (r.moved) reloadGroups(); } }
+async function moveNode(id, dir, keepFocus) {
+  const r = await send({ type: "moveNode", id, dir }); if (r && r.moved) { S.moved = id; clearTimeout(moveNode.t); moveNode.t = setTimeout(() => { S.moved = null; }, 900); }
+  await applyOrder(r); if (keepFocus) focusNode(id);
+}
+// Dragging a top-level folder. A pointer must travel a few pixels first, so a plain click still opens the folder.
+function folderBlocks(side) {
+  const out = []; const sr = side.getBoundingClientRect();
+  for (const el of side.querySelectorAll(".trow[data-id]")) {
+    const n = S.tree.find(x => x.id === el.dataset.id); if (!n) continue; const r = el.getBoundingClientRect();
+    if (isTopFolder(n)) out.push({ id: n.id, top: r.top - sr.top + side.scrollTop, bottom: r.bottom - sr.top + side.scrollTop, y0: r.top, y1: r.bottom });
+    else if (n.parent && out.length) { out[out.length - 1].bottom = r.bottom - sr.top + side.scrollTop; out[out.length - 1].y1 = r.bottom; }
+  }
+  return out;
+}
+function dropIndex(blocks, y) { for (let i = 0; i < blocks.length; i++) if (y < (blocks[i].y0 + blocks[i].y1) / 2) return i; return blocks.length; }
+function startDrag(e, n, row) {
+  if (e.button !== 0 || S.dialog) return;
+  const side = row.closest(".side"); const x0 = e.clientX, y0 = e.clientY; let on = false, idx = -1, line = null;
+  const cleanup = () => { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); document.removeEventListener("pointercancel", cancel); document.removeEventListener("keydown", key, true); document.body.classList.remove("dragging-folder"); row.classList.remove("lift"); line?.remove(); };
+  const move = (ev) => {
+    if (!on) { if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return; on = true; document.body.classList.add("dragging-folder"); row.classList.add("lift"); line = h("div", { class: "dropline", "aria-hidden": "true" }); side.append(line); }
+    ev.preventDefault(); const blocks = folderBlocks(side); if (!blocks.length) return; idx = dropIndex(blocks, ev.clientY);
+    const y = idx < blocks.length ? blocks[idx].top : blocks[blocks.length - 1].bottom; line.style.top = Math.round(y - 1) + "px";
+    const own = blocks.findIndex(b => b.id === n.id); line.dataset.still = String(idx === own || idx === own + 1);
+  };
+  const finish = async (go) => {
+    const blocks = on ? folderBlocks(side) : []; const at = idx; const was = on; cleanup();
+    if (was) { const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); }; window.addEventListener("click", stop, { capture: true, once: true }); setTimeout(() => window.removeEventListener("click", stop, true), 60); }
+    if (!was || !go || at < 0 || !blocks.length) return;
+    const ids = blocks.map(b => b.id); const from = ids.indexOf(n.id); if (from < 0) return; ids.splice(from, 1); ids.splice(at > from ? at - 1 : at, 0, n.id);
+    if (ids.join("|") === blocks.map(b => b.id).join("|")) return;
+    S.moved = n.id; setTimeout(() => { S.moved = null; }, 900); await applyOrder(await send({ type: "reorderFolders", ids }));
+  };
+  const up = () => finish(true); const cancel = () => finish(false); const key = (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); finish(false); } };
+  document.addEventListener("pointermove", move); document.addEventListener("pointerup", up); document.addEventListener("pointercancel", cancel); document.addEventListener("keydown", key, true);
+}
+// The right-click menu on the folder list.
+function closeCtx() { document.querySelector(".ctxmenu")?.remove(); document.removeEventListener("pointerdown", ctxAway, true); document.removeEventListener("keydown", ctxKey, true); window.removeEventListener("blur", closeCtx); window.removeEventListener("resize", closeCtx); }
+const ctxAway = (e) => { if (!e.target.closest || !e.target.closest(".ctxmenu")) closeCtx(); };
+const ctxKey = (e) => {
+  const m = document.querySelector(".ctxmenu"); if (!m) return; const items = [...m.querySelectorAll("button:not([disabled])")]; const i = items.indexOf(document.activeElement);
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); const back = m.dataset.from; closeCtx(); focusNode(back || "all"); }
+  else if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+  else if (e.key === "Tab") { e.preventDefault(); closeCtx(); }
+};
+async function markNodeRead(id) {
+  const node = id === "all" ? null : S.tree.find(x => x.id === id); const n = id === "all" ? S.unread : node ? node.unread : 0;
+  if (!n) return toast("Nothing to mark: everything here is already read.", { kind: "info" });
+  const where = id === "all" ? "in every folder" : `in “${node.label}”`;
+  if (!(await confirmIf("bulk", `Mark all ${plural(n)} ${where} as read?`))) return;
+  await bulkRead([], id); if (isFeedTab()) loadView();
+}
+function openCtx(e, id) {
+  e.preventDefault(); closeCtx(); const node = id === "all" ? null : S.tree.find(x => x.id === id); if (!node && id !== "all") return;
+  const unread = id === "all" ? S.unread : node.unread; const label = id === "all" ? "All articles" : node.label;
+  const item = (act, text, fn, o = {}) => h("button", { role: "menuitem", class: "ctxitem", "data-act": act, disabled: o.off ? true : null, onclick: () => { closeCtx(); fn(); } }, h("span", {}, text), o.note ? h("small", {}, o.note) : null);
+  const items = [item("mark-read", "Mark all read", () => markNodeRead(id), { off: !unread, note: unread ? String(unread) : "none unread" })];
+  if (isTopFolder(node)) items.push(h("div", { class: "ctxsep", role: "separator" }), item("move-up", "Move up", () => moveNode(id, "up"), { off: node.first }), item("move-down", "Move down", () => moveNode(id, "down"), { off: node.last }));
+  const menu = h("div", { class: "ctxmenu", role: "menu", "aria-label": label, "data-from": id }, h("div", { class: "ctxhead" }, label), ...items);
+  document.body.append(menu); const w = menu.offsetWidth, hh = menu.offsetHeight;
+  const x = e.clientX || e.target.getBoundingClientRect().left + 20, y = e.clientY || e.target.getBoundingClientRect().top + 10;
+  menu.style.left = Math.max(6, Math.min(x, window.innerWidth - w - 6)) + "px"; menu.style.top = Math.max(6, Math.min(y, window.innerHeight - hh - 6)) + "px";
+  document.addEventListener("pointerdown", ctxAway, true); document.addEventListener("keydown", ctxKey, true); window.addEventListener("blur", closeCtx); window.addEventListener("resize", closeCtx);
+  (menu.querySelector("button:not([disabled])") || menu).focus();
+}
 function toggleBionic() { setPref({ anchor: !U.anchor }); renderChrome(); toast(U.anchor ? "Bionic reading is on." : "Bionic reading is off.", { kind: "info" }); }
 // A redraw must not take the cursor out of the search box while someone is typing in it.
 function keepSearchFocus(fn) {
@@ -700,7 +800,7 @@ function settingsMain() {
   else if (tab === "ranking") content = [h("div", { class: "panel" }, h("h2", {}, "Relevance weights"), ...[["tag", "Tag match"], ["echo", "Sites you read"], ["authority", "Feed standing"], ["freshness", "Freshness"]].map(([k, l]) => { const out = h("span", {}, pct(d.weights[k])); return h("label", { class: "range" }, h("span", {}, l), h("input", { type: "range", min: 0, max: 1, step: 0.05, value: d.weights[k], oninput: (e) => { d.weights[k] = Number(e.target.value); out.textContent = pct(d.weights[k]); markDirty(); } }), out); }),
     h("p", { class: "note" }, "Only the proportions matter. They are rescaled to add up to one when saved."), chk("Boost feeds I have not opened this session", d, "novelty"))];
   else if (tab === "move") content = moveMain();
-  else if (tab === "machine") content = [h("div", { class: "panel" }, h("h2", {}, "This machine"), h("div", { class: "grid2" }, inp("Machine name (set once, keep it)", d, "device"), inp("Check for new articles every (minutes)", d, "pollMinutes", "number"), inp("Keep read articles for (days)", d, "retentionDays", "number")), chk("Write the weekly digest automatically", d, "autoDigest"))];
+  else if (tab === "machine") content = [h("div", { class: "panel" }, h("h2", {}, "This machine"), h("div", { class: "grid2" }, inp("Machine name (set once, keep it)", d, "device"), inp("Check for new articles every (minutes)", d, "pollMinutes", "number"), inp("Keep read articles for (days)", d, "retentionDays", "number")), chk("Write the weekly digest automatically", d, "autoDigest")), detectPanel()];
   else content = [h("div", { class: "panel" }, h("h2", {}, "Keyboard shortcuts"), h("div", { class: "keys" }, SHORTCUTS.map(([k, v]) => h("div", {}, h("span", {}, v), h("kbd", {}, k)))))];
   const needSave = tab === "connections" || tab === "ranking" || tab === "machine";
   return [h("div", { class: "page" }, h("h1", {}, "Settings"),

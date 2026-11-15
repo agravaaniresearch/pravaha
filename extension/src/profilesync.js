@@ -62,6 +62,7 @@ export class ProfileSync {
       if (!force && r.at <= this._meta(part).at) continue;
       const patch = patchFor(part, r.data); if (!patch) continue;
       if (part === "keys" && JSON.stringify(partData(this.s, "keys")) === JSON.stringify(r.data) && !force) { await this._setMeta(part, r.at, JSON.stringify(r.data)); continue; }
+      if (part === "order") patch.treeOrderAt = r.at;
       await this.engine.saveSettings(patch); await this._setMeta(part, r.at, JSON.stringify(r.data));
       applied.push({ part, by: r.by, at: r.at });
     }

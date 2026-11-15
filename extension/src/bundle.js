@@ -48,7 +48,7 @@ export async function importBundle(engine, text, { passphrase = "" } = {}) {
     patches.push(["keys", patchFor("keys", await open(o.keys, passphrase))]);
   }
   patches.push(["settings", patchFor("settings", o.settings)], ["order", patchFor("order", o.order)], ["ui", patchFor("ui", o.ui)]);
-  for (const [part, patch] of patches) if (patch) { await engine.saveSettings(patch); applied.push(part); }
+  for (const [part, patch] of patches) if (patch) { if (part === "order") patch.treeOrderAt = engine.now(); await engine.saveSettings(patch); applied.push(part); }
   let events = 0;
   if (Array.isArray(o.events) && o.events.length) { events = engine.log.merge(o.events); engine._invalidate(); await engine.persist(["events"]); if (events) applied.push("history"); }
   return { applied, events, from: o.from || null, exportedAt: o.exportedAt || null, hadKeys: !!o.keys };

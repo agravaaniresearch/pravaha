@@ -127,11 +127,11 @@ test("folders and feeds can be moved up and down, the order is remembered, and t
   const t = e.tree(); assert.equal(t.find(n => n.id === "cat:Defence").first, true); assert.equal(t.find(n => n.id === "cat:Food").last, true);
   assert.equal(await e.moveNode("cat:Defence", "up"), false, "already first"); assert.equal(await e.moveNode("cat:Food", "down"), false, "already last");
   assert.equal(await e.moveNode("cat:Food", "up"), true); assert.deepEqual(labels(), ["Food", "Broken Feed", "Kitchen Daily", "Defence", "Shipbuilding", "Naval Wire"]);
-  assert.equal(await e.moveNode("feed:2", "up"), true); assert.deepEqual(labels().slice(0, 3), ["Food", "Kitchen Daily", "Broken Feed"]);
-  const v = e.getView({ scope: "all", mode: "all" }); assert.deepEqual(v.groups.map(g => g.title), ["Kitchen Daily", "Broken Feed", "Naval Wire"], "the article list follows the sidebar");
+  assert.equal(await e.moveNode("feed:2", "up"), false, "feeds are ordered in Miniflux, not here"); assert.equal(await e.moveNode("cat:Defence/Shipbuilding", "up"), false, "only top-level folders move");
+  const v = e.getView({ scope: "all", mode: "all" }); assert.deepEqual(v.groups.map(g => g.title), ["Broken Feed", "Kitchen Daily", "Naval Wire"], "the article list follows the sidebar");
   assert.equal(await e.moveNode("cat:nope", "up"), false);
-  const e2 = new (e.constructor)({ storage, fetchImpl: w.fetchImpl }); await e2.load(); assert.deepEqual(e2.tree().map(n => n.label).slice(0, 3), ["Food", "Kitchen Daily", "Broken Feed"], "remembered across a restart");
-  await e.saveSettings({ pollMinutes: 5 }); assert.deepEqual(labels().slice(0, 2), ["Food", "Kitchen Daily"], "saving other settings keeps the order");
+  const e2 = new (e.constructor)({ storage, fetchImpl: w.fetchImpl }); await e2.load(); assert.deepEqual(e2.tree().map(n => n.label).slice(0, 3), ["Food", "Broken Feed", "Kitchen Daily"], "remembered across a restart");
+  await e.saveSettings({ pollMinutes: 5 }); assert.deepEqual(labels().slice(0, 2), ["Food", "Broken Feed"], "saving other settings keeps the order");
 });
 
 // ---------- discovery and subscribing ----------

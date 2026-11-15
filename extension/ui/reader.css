@@ -328,13 +328,6 @@ mark { background: color-mix(in srgb, var(--amber) 55%, transparent); color: inh
 .sidehead { display: flex; align-items: center; gap: 4px; padding: 0 2px 8px; }
 .sidehead .grow { flex: 1; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; padding-left: 6px; }
 .sidehead .ibtn { width: 30px; height: 30px; }
-.mv { display: inline-flex; flex: none; gap: 0; margin-left: 2px; }
-.mv button { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); padding: 0; }
-.mv button:hover:not([disabled]) { background: var(--hover); color: var(--text); }
-.mv button[disabled] { opacity: .25; cursor: default; }
-.mv button svg { width: 14px; height: 14px; }
-.side[data-reorder="true"] .tbtn .n { display: none; }
-.side[data-reorder="true"] { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
 
 .dialog.narrow { width: min(560px, 92vw); }
 .dialog .dfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
@@ -386,3 +379,25 @@ mark { background: color-mix(in srgb, var(--amber) 55%, transparent); color: inh
 .note.bad { color: var(--bad, #d9604b); }
 
 .pastebox{width:100%;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text);resize:vertical}
+
+/* Folder list: grab cursor, lift, drop line, right-click menu. Nothing here animates continuously. */
+.side { position: sticky; }
+.trow[data-grab="true"] .tbtn { cursor: grab; }
+body.dragging-folder, body.dragging-folder * { cursor: grabbing !important; user-select: none !important; }
+.trow.lift { opacity: .9; background: var(--raised); border-radius: 9px; box-shadow: 0 6px 18px color-mix(in srgb, var(--text) 16%, transparent); position: relative; z-index: 2; }
+.dropline { position: absolute; left: 8px; right: 8px; height: 3px; border-radius: 3px; background: var(--amber); pointer-events: none; z-index: 3; box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 22%, transparent); }
+.dropline[data-still="true"] { opacity: .35; }
+.trow.dropped { animation: settle .7s var(--ease) 1; }
+@keyframes settle { from { background: color-mix(in srgb, var(--amber) 30%, transparent); } to { background: transparent; } }
+.sidenote { margin: 16px 8px 0; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.5; color: var(--muted); }
+.sidenote a { color: var(--text); text-decoration-color: var(--amber); text-underline-offset: 2px; }
+.ctxmenu { position: fixed; z-index: 120; min-width: 210px; padding: 6px; border-radius: 12px; background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(14px) saturate(1.3); border: 1px solid var(--line); box-shadow: 0 14px 40px color-mix(in srgb, var(--text) 22%, transparent); animation: ctxin .14s var(--ease) 1; }
+@keyframes ctxin { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+.ctxhead { padding: 6px 10px 6px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctxitem { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 18px; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.ctxitem small { color: var(--muted); font-size: 12px; }
+.ctxitem:hover:not([disabled]), .ctxitem:focus-visible { background: var(--amber); color: #1d1408; outline: 0; }
+.ctxitem:hover:not([disabled]) small, .ctxitem:focus-visible small { color: #3b2a10; }
+.ctxitem[disabled] { opacity: .4; cursor: default; }
+.ctxsep { height: 1px; margin: 5px 6px; background: var(--line); }
+@media (prefers-reduced-motion: reduce) { .trow.dropped, .ctxmenu { animation: none; } }

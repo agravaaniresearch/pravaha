@@ -130,3 +130,22 @@ test("the progress bar cannot widen the page: it clips its own animation and ani
   assert.ok(!/\.progress\[data-mode="indeterminate"\] i \{[^}]*animation/.test(css), "a hidden bar must not keep animating");
   assert.match(css, /\.progress\[data-on="true"\]\[data-mode="indeterminate"\] i \{[^}]*animation: slide/);
 });
+
+// ---------- 0.5.0: folder order travels in the history log ----------
+test("dragging a folder writes an order event that another machine follows through the history route alone", async () => {
+  const w = await world(); const a = await w.mk("laptop"); await a.e.syncNow(); const b = await w.mk("home"); await b.e.syncNow();
+  const top = (e) => e.tree().filter(n => !n.parent && n.type === "folder").map(n => n.label);
+  assert.deepEqual(top(b.e), ["Defence", "Food"]);
+  assert.equal(await a.e.setOrder(["cat:Food", "cat:Defence"]), true); assert.deepEqual(top(a.e), ["Food", "Defence"]);
+  assert.ok(a.e.log.list().some(e => e.type === "order" && e.payload.scope === "root"), "an order event was written");
+  assert.equal(await a.e.setOrder(["cat:Food", "cat:Defence"]), false, "no event when nothing changed");
+  await a.e.syncNow(); await b.e.syncNow(); assert.deepEqual(top(b.e), ["Food", "Defence"], "B follows with no Firefox Sync at all");
+  // a newer local change (or one taken from Firefox Sync) beats an older event
+  await new Promise(r => setTimeout(r, 5)); await b.e.saveSettings({ treeOrder: { root: ["cat:Defence", "cat:Food"] }, treeOrderAt: b.e.now() + 10 }); assert.deepEqual(top(b.e), ["Defence", "Food"]);
+  assert.equal(await b.e.setOrder(["cat:nope"]), false, "unknown folders are ignored"); assert.equal(await b.e.setOrder([]), false);
+});
+test("older versions' rule is kept: a malformed order event is ignored, and the latest order event wins", async () => {
+  const w = await world(); const a = await w.mk("laptop"); await a.e.syncNow();
+  a.e.log.append("order", { payload: { scope: "root", ids: "not a list" } }); a.e._derived = null; assert.deepEqual(a.e.tree().filter(n => !n.parent && n.type === "folder").map(n => n.label), ["Defence", "Food"]);
+  await a.e.setOrder(["cat:Food"]); await a.e.setOrder(["cat:Defence"]); assert.deepEqual(a.e.tree().filter(n => !n.parent && n.type === "folder").map(n => n.label), ["Defence", "Food"]);
+});

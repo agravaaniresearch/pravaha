@@ -2,6 +2,7 @@ import { Engine } from "./src/engine.js";
 import { DwellTracker } from "./src/dwell.js";
 import { makeHandlers } from "./src/handlers.js";
 import { ProfileSync } from "./src/profilesync.js";
+import { FeedDetect } from "./src/feeddetect.js";
 
 const storage = { get: (k) => browser.storage.local.get(k), set: (o) => browser.storage.local.set(o) };
 const dwell = new DwellTracker();
@@ -69,7 +70,7 @@ function openSubscribe(target) {
   });
 }
 browser.runtime.onInstalled.addListener(() => {
-  browser.menus.removeAll().then(() => browser.menus.create({ id: "pravaha-find-feeds", title: "Find feeds here with Pravaha", contexts: ["page", "link"] }));
+  browser.menus.removeAll().then(() => browser.menus.create({ id: "pravaha-find-feeds", title: "Subscribe with Pravaha", contexts: ["page", "link"] }));
 });
 browser.menus.onClicked.addListener((info) => {
   const target = info.linkUrl || info.pageUrl; if (info.menuItemId === "pravaha-find-feeds" && /^https?:/i.test(target || "")) openSubscribe(target);
@@ -87,16 +88,22 @@ browser.tabs.onRemoved.addListener(async (tabId) => {
   if (r) await engine.recordDwell(r.meta.id, r.meta.feedId, r.ms);
 });
 
+const detect = new FeedDetect(browser);
+browser.tabs.onUpdated.addListener((tabId, info) => { if (info.status === "loading" || info.url) detect.clear(tabId); });
+browser.tabs.onRemoved.addListener((tabId) => detect.clear(tabId));
+browser.permissions.onRemoved.addListener(() => { detect.sync().catch(() => {}); });
+browser.runtime.onStartup.addListener(() => { detect.sync().catch(() => {}); });
 const handlers = makeHandlers({
   engine, runSync, schedule,
   openTab: async (r, id) => { const tab = await browser.tabs.create({ url: r.url, active: false }); dwell.track(tab.id, { id, feedId: r.feedId }, Date.now(), false); await saveDwell(); },
-  profile
+  profile, detect, openSubscribe
 });
 // Something arrived through Firefox Sync from another machine: take it if it is newer.
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && Object.keys(changes).some(k => k.startsWith("pv:"))) ready.then(() => profile.pull()).catch(() => {});
 });
-browser.runtime.onMessage.addListener((m) => {
+browser.runtime.onMessage.addListener((m, sender) => {
+  if (m && m.type === "feedsFound") return detect.found(sender, m);
   if (!m || !handlers[m.type]) return;
   return ready.then(() => handlers[m.type](m));
 });
