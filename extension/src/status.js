@@ -53,6 +53,14 @@ export function computeStatus(i) {
     }
     lights.push({ id: "machines", label: "Other machines", state: st, sentence: sentences.join(" ") });
   }
+  // One entry per machine for the dashboard: this machine first, then the others as the storage last described them.
+  const counts = i.eventCounts || {};
+  const devices = [{ device: i.device, me: true, events: counts[i.device] || 0, lastSeenAt: null, state: i.pendingEvents > 0 ? "amber" : "green" }];
+  for (const [dev, s] of others) {
+    const theyHaveMine = !i.myHead || (s.appliedHeads && s.appliedHeads[i.device] && s.appliedHeads[i.device] >= i.myHead);
+    const iHaveTheirs = !s.head || (i.remoteHeads[dev] && i.remoteHeads[dev] >= s.head);
+    devices.push({ device: dev, me: false, events: counts[dev] || 0, lastSeenAt: s.updatedAt || null, state: iHaveTheirs && theyHaveMine ? "green" : "amber", behind: !theyHaveMine, ahead: !iHaveTheirs });
+  }
 
   // Feed health
   if (i.feeds && i.feeds.total) {
@@ -67,7 +75,7 @@ export function computeStatus(i) {
   const overall = !i.miniflux.configured ? "off" : worst(syncLights.map(l => l.state));
   const scope = !i.miniflux.configured ? "none" : i.webdav.configured ? "full" : "miniflux";
   return {
-    overall, scope, lights,
+    overall, scope, lights, devices,
     left: { events: i.pendingEvents, ops: i.pendingOps, machines }
   };
 }

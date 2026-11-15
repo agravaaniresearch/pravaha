@@ -20,7 +20,7 @@ def build_ext(dst):
     return dst
 
 class Browser:
-    def __init__(self, name="A", ext_dir=None, profile=None, headless=True, width=1360, height=900):
+    def __init__(self, name="A", ext_dir=None, profile=None, headless=True, width=1360, height=900, prefs=None):
         os.environ["MOZ_REMOTE_ALLOW_SYSTEM_ACCESS"] = "1"  # lets Marionette open and script moz-extension: pages
         self.name = name; self.uuid = UUIDS[name]
         self.profile = profile or tempfile.mkdtemp(prefix=f"pv-prof-{name}-")
@@ -32,6 +32,7 @@ class Browser:
         o.set_preference("extensions.autoDisableScopes", 0)
         o.set_preference("browser.shell.checkDefaultBrowser", False)
         o.set_preference("datareporting.policy.dataSubmissionEnabled", False)
+        for k, v in (prefs or {}).items(): o.set_preference(k, v)
         self.d = webdriver.Firefox(options=o, service=Service(os.path.join(FFX, "geckodriver"), log_output=os.path.join(tempfile.gettempdir(), f"gecko-{name}.log")))
         self.d.set_window_size(width, height)
         if ext_dir: self.install(ext_dir)

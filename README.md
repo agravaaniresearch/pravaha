@@ -16,15 +16,16 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Marks read reliably.** `Shift+A` marks the section read (with nothing selected it acts on the first section on screen), `Shift+M` marks everything in the current view. The reader works by section, folder or all, not by the rows on screen, sends in chunks, then asks Miniflux which articles are still unread and sends those again. The message says what Miniflux confirmed and has Undo.
 - **Shows when it is talking to Miniflux.** A bar under the top edge, a pill with "Sending changes to Miniflux, 120 of 400", a small spinner on each article still on its way, a progress line under each section, then "Synced with Miniflux".
 - **Asks before marking a whole section or folder** (settings: never, sections and mark all, always).
-- **Reorders folders and feeds** with up and down arrows; the article list follows the sidebar.
-- **Adds feeds from a website.** Press `a`, paste an address, Miniflux finds the feeds on it, pick one and a folder (or make a new one). Right-click any page or link, then "Find feeds here with Pravaha", to start from there.
+- **Reorders top-level folders by dragging them** (the cursor becomes a hand), with Alt+Up and Alt+Down as a keyboard alternative. The order reaches your other machines through Firefox Sync and through the reading-history log. Feeds are listed alphabetically inside each folder; their names and folders are set in Miniflux.
+- **Has a right-click menu on the folder list** (folders, feeds and All articles): Mark all read, with the same confirmation setting and an Undo, and Move up or Move down for top-level folders.
+- **Adds feeds from a website.** Press `a`, paste an address, Miniflux finds the feeds on it, pick one and a folder (or make a new one). Right-click any page or link, then "Subscribe with Pravaha", to open the same dialog with that address filled in.
 - **Has an OLED black theme** besides light and dark, eleven reading fonts and five interface fonts, chosen from labelled cards with a live sample (all open fonts bundled; Apple's SF Pro and New York can be added for your own build, see below), and reading controls for size, line gap and width.
 - **Shows relevance as colour.** There are no Good, Great or Best tiers. Each row has a bar and a chip that darken as the score rises. Three palettes are included: ember, saffron and moss.
 - **Learns from what you do.** Opening in a tab, reading a card, reading for more than 15 seconds, saving and dismissing all move a feed's standing. They fade with a 14 day half life. Opens and saves also pull your interest profile toward the article.
 - **Trains like NewsBlur.** Open an article's details and choose More or Less for the feed, the author or a keyword.
 - **Suggests tags locally.** Suggestions come from your own Raindrop tag vocabulary. No model and no network call is involved.
 - **Syncs two machines safely.** Every action is an event in an append-only log. Each machine writes only its own files, so they cannot overwrite each other. Merging is a set union, so the order of arrival never changes the result.
-- **Tells you the state in plain words.** Six status lights say what is working and what is left to sync.
+- **Tells you the state in plain words.** Settings and Sync are folder-tabbed pages. Sync is a dashboard with a status ring, a tile per service and per machine, and small graphs; every tab carries a status lamp.
 - **Moves your whole setup between machines.** Keys, settings, folder order and look travel through Firefox Sync by themselves; a new machine shows three set-up routes (Firefox Sync, a settings file, typing the keys) and then imports articles and reading history with a progress message. The settings file seals keys with a passphrase. Two installs with the same machine name are stopped before they can mix history.
 - **Never says "In sync" falsely.** With nothing connected the pill says "Not set up"; with only Miniflux it says "Miniflux in sync". Background polls are quiet and do not redraw the page.
 - **Writes a weekly digest** to the WebDAV folder as Markdown with Dataview front matter, for Obsidian.
@@ -150,11 +151,15 @@ The local index covers every article Pravaha has seen in the last 400 days, incl
 
 ### Adding a feed
 
-Press `a` or the plus in the sidebar. Paste a website or feed address and press Find feeds. Miniflux's own server looks at the page and lists the feeds it found; ones you already follow are greyed. Pick one, choose a folder (the current folder is preselected) or "New folder" (use `/` for a sub-folder, like `News/World`), then Subscribe. The feed and its first articles appear straight away. From any web page, right-click and choose "Find feeds here with Pravaha" to open the same dialog with that address filled in.
+Press `a` or the plus in the sidebar. Paste a website or feed address and press Find feeds. Miniflux's own server looks at the page and lists the feeds it found; ones you already follow are greyed. Pick one, choose a folder (the current folder is preselected) or "New folder" (use `/` for a sub-folder, like `News/World`), then Subscribe. The feed and its first articles appear straight away. From any web page, right-click and choose "Subscribe with Pravaha" to open the same dialog with that address filled in.
 
-### Reordering
+### Reordering folders
 
-Press the arrows button in the sidebar header. Each folder and feed gets up and down arrows; folders move among folders and feeds among feeds of the same parent. The article list follows the sidebar. The order is kept on this machine and does not change anything in Miniflux.
+Grab a top-level folder in the sidebar and drop it where you want it; a line shows where it will land. The article list follows the sidebar. Right-click a folder and choose Move up or Move down, or press Alt with the arrow keys on a focused folder, if you would rather not drag. Only top-level folders move. Miniflux itself has no manual feed order, so feeds are listed alphabetically inside each folder, and their names and folders are set on the Miniflux website. The order is written to the reading history as an `order` event and to Firefox Sync, so every machine follows it. Machines still on 0.4.x cannot read that event, so update all of them.
+
+### Feeds on web pages
+
+Right-click a page or link and choose "Subscribe with Pravaha". Optionally, turn on Settings, This machine, "Detect feeds on pages": Pravaha explains what it needs, then Firefox asks for permission to run on all websites. With it on, the toolbar icon turns amber and shows a count on pages that announce a feed, and clicking it lists them with a Subscribe button. The script reads only the feed links in the page's head and sends them to Pravaha inside the browser. Turn it off and the permission is given back. Without it, right-click subscribe keeps working.
 
 ## How ranking works
 
@@ -184,6 +189,15 @@ Miniflux (feeds, entries, read state, stars, icons, full-article fetch)
 
 - `extension/src/engine.js` holds the state and the rules; `eventlog.js` merges events by set union; `scoring.js` scores; `miniflux.js`, `webdav.js` and `raindrop.js` are thin clients; `handlers.js` is the message layer between the reader and the engine; `safehtml.js` sanitises article HTML; `anchor.js` applies Bionic reading; `search.js` does the fuzzy search and its query language.
 - The reader page never uses `innerHTML` for article text. Article HTML is parsed in an inert document and only allowlisted elements are rebuilt as DOM nodes.
+
+New in 0.5.0 (taken in real Firefox 160 with synthetic data; the machines, folders and feeds are invented):
+
+| | |
+|---|---|
+| ![Sync dashboard](docs/screenshots/22-sync-dashboard.png)<br>**Sync dashboard.** A status ring, a tile per service and a four-part Firefox Sync bar. | ![Machines](docs/screenshots/23-sync-machines.png)<br>**Machines.** One tile per machine with its history count and state. |
+| ![Firefox Sync tab](docs/screenshots/24-sync-firefox.png)<br>**Firefox Sync tab.** The four parts it carries, each with a lamp. | ![Settings, Connections](docs/screenshots/25-settings-connections.png)<br>**Settings as folder tabs,** each with an icon and, where it applies, a lamp. |
+| ![This machine](docs/screenshots/26-settings-this-machine.png)<br>**Feeds on web pages.** The switch is off until you turn it on. | ![Explanation](docs/screenshots/29-detect-explanation.png)<br>**Pravaha explains the permission first,** then Firefox asks. |
+| ![Dragging a folder](docs/screenshots/27-drag-folder.png)<br>**Dragging a folder.** A drop line shows where it will land. | ![Right-click menu](docs/screenshots/28-right-click-menu.png)<br>**Right-click** on a folder: Mark all read, Move up, Move down. |
 
 ## Privacy and security
 
@@ -236,7 +250,8 @@ The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. 
 - **Real Firefox, with limits.** Since 0.4.0 the setup-moving, status and quiet-poll behaviour is exercised in real Firefox 160 (the base of Zen) with `tools/firefox-e2e/`. Zen itself, a long-running profile and the older 0.3.x screens (scroll behaviour, the right-click menu) have not been driven that way.
 - **Firefox Sync's cloud was not reached.** The e2e copies `storage.sync` items between profiles, which is what Firefox does, but real delivery, its timing, the size limits quoted in SCHEMA.md and the "Add-ons ticked" requirement come from documentation and are unverified.
 - **New Miniflux calls in 0.3.0 are untested against a real server.** `POST /discover`, `POST /feeds`, `POST /categories`, the `search` filter on `/entries`, and the chunked `PUT /entries` with a read-back check follow the documented API and are tested against fakes only. How Miniflux words its errors, and how long a new feed takes to fetch its first articles, are guesses from the documentation. If one misbehaves, the message shown is Miniflux's own.
-- **The right-click menu is untested in a real Firefox.** It uses the `menus` API and a `#subscribe=` address passed to the reader tab; the logic is tested, the menu itself has not been seen.
+- **The browser's own right-click menu item ('Subscribe with Pravaha') is not exercised by the e2e.** WebDriver cannot drive Firefox's page context menu. The code behind it and the `#subscribe=` hand-off are tested, and the sidebar menu, drag-and-drop and feed detection (with the optional permission) were driven in real Firefox 160.
+- **Feed detection is checked on simple pages.** Sites that add their feed link late, inside frames, or only as a plain link in the body are not detected. Firefox's own permission prompt was switched off by a test preference, so its wording as Firefox shows it was not seen.
 - **The "some remain unread" fix is tested against a fake that drops ids.** The cause in your Miniflux is inferred from how the reader worked, not observed. The check afterwards is what makes the outcome visible either way.
 - **Two Miniflux calls are untested against a real server.** Full-article fetch (`/entries/{id}/fetch-content`) and feed icons (`/feeds/{id}/icon`) follow the documented API and are tested against fakes only.
 - **Not run against real servers.** The Miniflux, Fastmail WebDAV and Raindrop calls follow their documented APIs and are tested against fakes only. The Miniflux `changed_after` filter is the least certain of them.

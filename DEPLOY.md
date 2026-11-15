@@ -57,7 +57,7 @@ If you update a machine that still has the old default name `this-machine` and h
 
 Install the new `.xpi` over the old one, as in step 3. Settings, history and the saved order stay. What is new on first start:
 
-- Firefox will ask to approve one new permission, **menus**, for the right-click item "Find feeds here with Pravaha". It cannot read pages.
+- Firefox will ask to approve one new permission, **menus**, for the right-click item "Subscribe with Pravaha" (renamed in 0.5.0). It cannot read pages.
 - The first refresh builds the search index from the articles already cached. Articles read before the update are findable only while they remain in the cache; the index keeps them for 400 days from then on.
 - The first bulk mark-read afterwards does a check against Miniflux, which fetches the unread list once more than before. On a very large unread backlog that is a few extra requests.
 - Nothing in WebDAV changes. The event log, state files and digests are unchanged, so 0.2.x and 0.3.0 can run on two machines at once.
@@ -76,6 +76,12 @@ Apple's fonts are not in the repository. To use them yourself: `pip install font
 - If a machine is lost, install on a new one with a new name. It rebuilds everything from Miniflux, Raindrop and the event log.
 
 
+## 6b. Updating to 0.5.0
+
+Update every machine to 0.5.0 before using folder drag-and-drop on any of them: an older version counts the new `order` lines in the history as invalid (they are skipped and reported, nothing is lost). The toolbar icon, the popup and the "Subscribe with Pravaha" item need no setup. Feed detection is optional: Settings, This machine, "Detect feeds on pages". Firefox asks once for permission to run on all websites; saying no changes nothing else.
+
 ## 7. Testing in real Firefox
 
 `tools/firefox-e2e/` drives two or three real Firefox profiles with Selenium against a fake Miniflux and WebDAV. Needs Firefox (160 tested; Zen is built on it) and geckodriver under `/home/claude/ffx` (or set `FFX`), `pip install selenium`, and `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` (set by the script) so Marionette may open extension pages. Run `node tools/firefox-e2e/serve.mjs 8799 &` then `python3 tools/firefox-e2e/e2e.py`. `tools/firefox-e2e/probe_flash.py` runs two active machines for a few minutes and counts toasts and redraws while idle. Firefox Sync's cloud is not reachable there, so delivery is simulated by copying the `storage.sync` items between profiles.
+
+`e2e050.py` (0.5.0) drags a folder with real pointer input, opens the right-click menu, scans the Sync and Settings tabs at 2370 and 1360 pixels for sideways scrolling, and turns feed detection on and off against a page served on port 8801. It sets `extensions.webextOptionalPermissionPrompts` to false so Firefox's permission prompt does not block the run. `shots050.py` takes the page screenshots.

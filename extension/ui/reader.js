@@ -20,7 +20,7 @@ export const S = {
   rows: new Map(), openCard: null, selId: null, keep: new Set(), content: {}, tags: {}, limits: {},
   collapsed: new Set(lsGet("pravaha.collapsed", [])), auto: new Set(), treeCollapsed: new Set(lsGet("pravaha.treeCollapsed", [])),
   newIds: new Set(), pop: null, help: false, toast: "", busy: false, stats: null, searchIn: "all", moved: null, dialog: null, syncFlash: 0,
-  stab: "connections", draft: null, tests: {}, dirty: false
+  stab: "connections", ytab: "overview", draft: null, tests: {}, dirty: false
 };
 let U = loadPrefs();
 const prefersDark = () => !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -173,10 +173,11 @@ function renderIndicator() { const p = $app.querySelector(".pill"); if (p) p.rep
 // ---------- dialogs ----------
 function dialogHost() { let d = document.querySelector(".dialogs"); if (!d) { d = h("div", { class: "dialogs" }); document.body.append(d); } return d; }
 function closeDialog() { S.dialog = null; S.dialogCancel = null; dialogHost().replaceChildren(); }
-function askConfirm({ title, body, confirmLabel = "OK", cancelLabel = "Cancel" }) {
+// act runs inside the click itself, because Firefox only allows some requests (like a permission prompt) straight from a click.
+function askConfirm({ title, body, confirmLabel = "OK", cancelLabel = "Cancel", act = null }) {
   return new Promise((resolve) => {
     S.dialog = "confirm"; const done = (v) => { closeDialog(); resolve(v); }; S.dialogCancel = () => done(false);
-    const ok = h("button", { class: "btn primary", "data-act": "confirm", onclick: () => done(true) }, confirmLabel);
+    const ok = h("button", { class: "btn primary", "data-act": "confirm", onclick: () => done(act ? act() : true) }, confirmLabel);
     dialogHost().replaceChildren(h("div", { class: "overlay", onclick: () => done(false) }, h("div", { class: "dialog narrow", role: "alertdialog", "aria-label": title, onclick: (e) => e.stopPropagation() },
       h("h2", {}, title), ...[].concat(body).map(t => h("p", {}, t)), h("div", { class: "dfoot" }, h("button", { class: "btn", "data-act": "cancel", onclick: () => done(false) }, cancelLabel), ok))));
     ok.focus();
@@ -190,18 +191,18 @@ async function toggleDetect() {
   try {
     if (st.on) { S.detect = await send({ type: "feedDetectOff" }); S.detectMsg = "Feed detection is off. Right-click Subscribe with Pravaha still works."; }
     else {
-      const go = await askConfirm({ title: "Detect feeds on pages?", confirmLabel: "Continue to Firefox’s question", cancelLabel: "Not now", body: [
+      const ask = await askConfirm({ title: "Detect feeds on pages?", act: () => browser.permissions.request({ origins: ALL_SITES }).then(ok => ({ ok }), (err) => ({ ok: false, err })), confirmLabel: "Continue to Firefox’s question", cancelLabel: "Not now", body: [
         "Pravaha can colour its toolbar icon on pages that offer a feed, so you can subscribe in one click. To do that, Firefox has to let Pravaha run a small script on web pages. Firefox words this as “Access your data for all websites”, and that wording is Firefox’s, not ours.",
         "The script reads one thing: the feed links in the page’s head. It hands those addresses to Pravaha inside your browser. It does not read the page text, forms or cookies, and nothing is sent anywhere.",
         "You can turn this off here at any time. If you say no, nothing changes: right-click, Subscribe with Pravaha, keeps working on any page or link."] });
-      if (!go) S.detectMsg = "Feed detection stays off.";
+      if (!ask) S.detectMsg = "Feed detection stays off.";
       else {
-        const ok = await browser.permissions.request({ origins: ALL_SITES });
+        const ok = ask.ok;
         if (!ok) S.detectMsg = "Firefox did not grant it, so detection stays off. Right-click Subscribe with Pravaha still works.";
         else { S.detect = await send({ type: "feedDetectOn" }); S.detectMsg = S.detect.on ? "Feed detection is on. Pages you open from now on are checked; ones already open are not." : (S.detect.sentence || "Feed detection could not be turned on."); }
       }
     }
-  } catch { S.detectMsg = "Something went wrong, and feed detection was left as it was."; await loadDetect(); }
+  } catch (e) { S.detectMsg = "Something went wrong, and feed detection was left as it was. Firefox said: " + String((e && e.message) || e).slice(0, 160); await loadDetect(); }
   S.detectBusy = false; renderMain();
 }
 function detectPanel() {
@@ -507,6 +508,7 @@ function observeRows() {
 const TABS = [["feed", "Newsfeed", "list"], ["saved", "Saved", "star"], ["stats", "Stats", "chart"], ["sync", "Sync", "sync"], ["settings", "Settings", "gear"]];
 const THEMES = ["light", "dark", "oled", "auto"]; const THEME_NAMES = { light: "Light", dark: "Dark", oled: "OLED black", auto: "Follow the system" };
 function go(tab) {
+  S.lastSheet = null;
   stopDwell(); dw.id = null; S.openCard = null; S.tab = tab; lsSet("pravaha.tab", tab); S.keep = new Set(); S.pop = null;
   if (tab === "feed" || tab === "saved") loadView();
   else if (tab === "stats") Promise.all([send({ type: "stats" }), send({ type: "rules" })]).then(([st, ru]) => { S.stats = st; S.rules = ru; render(); });
@@ -712,19 +714,81 @@ function statsMain() {
 }
 
 // ---------- sync ----------
+
+// ---------- page chrome: folder tabs, status lamps, gauges and small graphs ----------
+const SVGNS = "http://www.w3.org/2000/svg";
+const svgEl = (tag, attrs = {}, ...kids) => { const e = document.createElementNS(SVGNS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v)); for (const k of kids) if (k) e.append(k); return e; };
+const STATE_WORD = { green: "Good", amber: "Catching up", red: "Needs attention", off: "Off" };
+const worstOf = (states) => { const R = { off: 0, green: 1, amber: 2, red: 3 }; const live = states.filter(x => x && x !== "off"); return live.length ? live.reduce((a, b) => (R[b] > R[a] ? b : a)) : "off"; };
+// A row of tabs shaped like folder tabs. The chosen one joins the sheet below it; each can carry an icon and a status lamp.
+function folderTabs(items, active, onPick, label) {
+  return h("div", { class: "stabs", role: "tablist", "aria-label": label }, items.map(it => h("button", { class: "stab", role: "tab", "data-tab": it.id, "aria-selected": String(active === it.id), title: it.lamp ? `${it.label}: ${STATE_WORD[it.lamp]}` : it.label, onclick: () => onPick(it.id) },
+    icon(it.icon, 17), h("span", { class: "stl" }, it.label), it.lamp ? h("span", { class: "lamp " + it.lamp, "aria-label": STATE_WORD[it.lamp] }) : null)));
+}
+// The sheet slides in once when a tab is chosen, not on every redraw (a redraw that replayed it would flash).
+const sheet = (id, ...kids) => { const key = S.tab + ":" + id; const fresh = S.lastSheet !== key; S.lastSheet = key; return h("div", { class: "sheet" + (fresh ? " enter" : ""), role: "tabpanel", "data-sheet": id }, ...kids); };
+function pageHead(title, sub) { return h("header", { class: "phead" }, h("h1", {}, title), sub ? h("p", {}, sub) : null); }
+// A ring that shows a share of something. Static: it is drawn once and never animates on its own.
+function ring(frac, state, centre, small, label) {
+  const R = 46, C = 2 * Math.PI * R; const f = Math.max(0, Math.min(1, frac));
+  return h("div", { class: "ring " + state, role: "img", "aria-label": label || "" }, svgEl("svg", { viewBox: "0 0 120 120", width: small ? 76 : 132, height: small ? 76 : 132, "aria-hidden": "true" },
+    svgEl("circle", { class: "rtrack", cx: 60, cy: 60, r: R, fill: "none", "stroke-width": 9 }), svgEl("circle", { class: "rarc", cx: 60, cy: 60, r: R, fill: "none", "stroke-width": 9, "stroke-linecap": "round", "stroke-dasharray": `${(C * f).toFixed(1)} ${C.toFixed(1)}`, transform: "rotate(-90 60 60)" })),
+    h("div", { class: "rmid" }, centre));
+}
+// A tiny area graph from a list of numbers. The last point wears a dot.
+function areaGraph(points, label, unit) {
+  const W = 300, Hh = 64; const max = Math.max(1, ...points);
+  if (points.length < 2) return h("p", { class: "note graphnote" }, "The graph appears after a few syncs.");
+  const xy = points.map((v, i) => [(i / (points.length - 1)) * W, Hh - 6 - (v / max) * (Hh - 14)]); const line = xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const last = xy[xy.length - 1];
+  return svgEl("svg", { class: "area", viewBox: `0 0 ${W} ${Hh}`, preserveAspectRatio: "none", role: "img", "aria-label": `${label}. Latest ${points[points.length - 1]} ${unit}. Highest ${max}.` },
+    svgEl("polygon", { class: "afill", points: `0,${Hh} ${line} ${W},${Hh}` }), svgEl("polyline", { class: "aline", points: line, fill: "none", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke" }), svgEl("circle", { class: "adot", cx: last[0], cy: last[1], r: 3.2 }));
+}
+const tile = (state, icn, title, big, sentence, foot, extra) => h("div", { class: "tile light", "data-state": state },
+  h("div", { class: "thead" }, h("span", { class: "tico" }, icon(icn, 18)), h("b", {}, title), h("span", { class: "lamp " + state, title: STATE_WORD[state] })), big != null ? h("div", { class: "tbig" }, big) : null, h("p", { class: "tsent" }, sentence), extra || null, foot ? h("div", { class: "tfoot" }, foot) : null);
+
 function syncMain() {
   const st = S.status; if (!st) return [h("div", { class: "empty" }, "Loading")]; const l = st.left || {}; const machines = Array.isArray(l.machines) ? l.machines : [];
-  const lights = st.lights.map(x => h("div", { class: "light" }, h("span", { class: "lamp " + x.state }), h("div", {}, h("b", {}, `${x.label}: ${x.state === "green" ? "good" : x.state === "amber" ? "catching up" : x.state === "red" ? "needs attention" : "off"}`), h("span", {}, x.sentence))));
-  const hist = (S.stats && S.stats.pendingHistory) || []; const max = Math.max(1, ...hist.map(p => p.pending));
-  const spark = hist.length > 1 ? (() => { const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("viewBox", "0 0 300 60"); svg.setAttribute("width", "100%"); svg.setAttribute("height", "60"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Changes waiting to sync over time");
-    const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline"); pl.setAttribute("points", hist.map((p, i) => `${(i / (hist.length - 1) * 300).toFixed(1)},${(56 - p.pending / max * 52).toFixed(1)}`).join(" ")); pl.setAttribute("fill", "none"); pl.setAttribute("stroke", "var(--accent)"); pl.setAttribute("stroke-width", "2"); svg.appendChild(pl); return svg; })() : h("p", { class: "note" }, "The history chart fills in after a few syncs.");
-  const n = (l.events || 0) + (l.ops || 0);
-  return [h("div", { class: "page" }, h("h1", {}, "Sync"),
-    h("div", { class: "hero" }, h("div", { style: { flex: "1 1 260px" } }, h("h2", {}, st.overall === "green" ? "All in sync" : st.overall === "red" ? "Something needs attention" : st.overall === "amber" ? "Catching up" : "Not set up yet"),
-      h("p", {}, `${n ? `${n} change${n === 1 ? "" : "s"} still to sync` : "Nothing left to sync"}${machines.length ? `. Other machines: ${machines.map(m => m.device || "machine").join(", ")}.` : "."}`)),
-      st.activity ? h("p", { class: "note" }, `${st.activity.label}${st.activity.total ? `: ${Math.min(st.activity.done, st.activity.total)} of ${st.activity.total}` : ""}`) : null,
-      h("button", { class: "btn primary", onclick: syncNow }, icon("sync", 15), S.busy ? "Syncing" : "Sync now"), h("button", { class: "btn", onclick: async () => { const r = await send({ type: "digest" }); toast(r.sentence); } }, "Write digest now")),
-    h("div", { class: "panel" }, lights), h("div", { class: "panel" }, h("h2", {}, "Changes waiting over time"), spark), fxCard())];
+  const lightOf = (id) => st.lights.find(x => x.id === id); const n = (l.events || 0) + (l.ops || 0);
+  const fx = S.fx; const fxState = !fx ? "off" : fx.error || !fx.readable ? "red" : worstOf(fx.parts.map(p => fxLine(p)[0]));
+  const devices = st.devices || []; const others = devices.filter(d => !d.me); const macState = worstOf(devices.length > 1 ? others.map(d => d.state) : []);
+  const tab = S.ytab || "overview";
+  const tabs = folderTabs([{ id: "overview", label: "Overview", icon: "gauge", lamp: st.overall }, { id: "firefox", label: "Firefox Sync", icon: "sync", lamp: fxState }, { id: "machines", label: "Machines", icon: "devices", lamp: macState }], tab, (id) => { S.ytab = id; renderMain(); }, "Sync sections");
+  let body;
+  if (tab === "firefox") body = firefoxSheet(fxState);
+  else if (tab === "machines") body = machinesSheet(devices);
+  else {
+    const hist = (S.stats && S.stats.pendingHistory) || []; const peak = Math.max(1, n, ...hist.map(p => p.pending));
+    const act = st.activity; const frac = act && act.total ? Math.min(1, act.done / act.total) : st.overall === "off" ? 0 : n ? Math.max(0.04, 1 - n / peak) : 1;
+    const headline = st.overall === "green" ? "All in sync" : st.overall === "red" ? "Something needs attention" : st.overall === "amber" ? "Catching up" : "Not set up yet";
+    const sub = `${n ? `${n} change${n === 1 ? "" : "s"} still to sync` : "Nothing left to sync"}${machines.length ? `. Other machines: ${machines.map(m => m.device || "machine").join(", ")}.` : "."}`;
+    const total = devices.reduce((a, d) => a + d.events, 0);
+    const svc = (id, icn, title) => { const x = lightOf(id); return x ? tile(x.state, icn, title, null, x.sentence) : null; };
+    body = [h("div", { class: "hero dash", "data-state": st.overall }, ring(frac, st.overall, st.overall === "green" ? icon("check", 40) : h("span", { class: "rnum" }, String(n)), false, headline),
+      h("div", { class: "herotext" }, h("p", { class: "eyebrow" }, "Sync status"), h("h2", {}, headline), h("p", {}, sub), st.activity ? h("p", { class: "note" }, `${st.activity.label}${st.activity.total ? `: ${Math.min(st.activity.done, st.activity.total)} of ${st.activity.total}` : ""}`) : null,
+        h("div", { class: "heroact" }, h("button", { class: "btn primary", onclick: syncNow }, icon("sync", 15), S.busy ? "Syncing" : "Sync now"), h("button", { class: "btn", onclick: async () => { const r = await send({ type: "digest" }); toast(r.sentence); } }, "Write digest now")))),
+      h("div", { class: "tiles" }, svc("miniflux", "rss", "Miniflux"), svc("webdav", "layers", "WebDAV storage"), svc("log", "clock", "Reading history"), svc("raindrop", "bookmark", "Raindrop"), svc("feeds", "list", "Feeds"),
+        tile(fxState, "sync", "Firefox Sync", null, !fx ? "Reading Firefox Sync." : fx.error ? fx.error : fx.parts.map(p => fxLine(p)[1]).slice(0, 1).join(""), null, h("div", { class: "fxbar", role: "img", "aria-label": "The four parts Firefox Sync carries" }, (fx ? fx.parts : [{}, {}, {}, {}]).map(p => h("i", { "data-s": p.part ? fxLine(p)[0] : "off", title: p.part ? FX_NAMES[p.part] : "" }))))),
+      h("div", { class: "graphs" }, h("div", { class: "gcard" }, h("div", { class: "gtitle2" }, h("b", {}, "Changes waiting"), h("span", {}, n ? `${n} now` : "none now")), areaGraph(hist.map(p => p.pending), "Changes waiting to sync over time", "changes")),
+        h("div", { class: "gcard" }, h("div", { class: "gtitle2" }, h("b", {}, "History on the storage"), h("span", {}, `${total.toLocaleString()} events`)),
+          total ? h("div", { class: "stack", role: "img", "aria-label": devices.map(d => `${d.device}: ${d.events} events`).join(". ") }, devices.map((d, i) => h("i", { style: { flexGrow: String(Math.max(d.events, 0.01)) }, "data-i": String(i % 4), title: `${d.device}: ${d.events.toLocaleString()} events` }))) : h("p", { class: "note graphnote" }, "Nothing recorded yet."),
+          total ? h("div", { class: "legend" }, devices.map((d, i) => h("span", {}, h("i", { "data-i": String(i % 4) }), `${d.device || "machine"} ${d.events.toLocaleString()}`))) : null))];
+  }
+  return [h("div", { class: "page" }, pageHead("Sync", "Where everything stands, in one place."), tabs, sheet(tab, ...body))];
+}
+function firefoxSheet(state) {
+  const fx = S.fx; const parts = fx ? fx.parts : [];
+  const cells = parts.map(p => { const [lamp, text] = fxLine(p); return h("div", { class: "cell", "data-state": lamp }, h("span", { class: "lamp " + lamp }), h("b", {}, FX_NAMES[p.part]), h("span", {}, text)); });
+  return [h("div", { class: "cells", "aria-label": "What Firefox Sync carries" }, cells.length ? cells : [h("p", { class: "note" }, "Reading Firefox Sync.")]), fxCard()];
+}
+function machinesSheet(devices) {
+  const max = Math.max(1, ...devices.map(d => d.events));
+  if (!devices.length) return [h("p", { class: "note" }, "No machine has written history yet.")];
+  return [h("div", { class: "tiles machines" }, devices.map(d => h("div", { class: "tile machine", "data-me": String(d.me), "data-state": d.state },
+    h("div", { class: "thead" }, h("span", { class: "tico" }, icon("laptop", 18)), h("b", {}, d.device || "machine"), d.me ? h("span", { class: "badge" }, "This machine") : null, h("span", { class: "lamp " + d.state, title: STATE_WORD[d.state] })),
+    h("div", { class: "tbig" }, d.events.toLocaleString(), h("small", {}, d.events === 1 ? " event" : " events")), h("div", { class: "meter", role: "img", "aria-label": `${d.events} of ${max} events, relative to the largest machine` }, h("i", { style: { width: Math.round(d.events / max * 100) + "%" } })),
+    h("p", { class: "tsent" }, d.me ? (d.state === "green" ? "Everything on this machine is on the storage." : "Some changes here have not reached the storage yet.") : d.behind ? "Has not yet received your latest changes. It catches up when it next opens." : d.ahead ? "Has changes this machine has not read yet." : "Up to date."),
+    d.lastSeenAt ? h("div", { class: "tfoot" }, "Last connected " + since(d.lastSeenAt)) : null)))];
 }
 
 // ---------- settings ----------
@@ -803,11 +867,12 @@ function settingsMain() {
   else if (tab === "machine") content = [h("div", { class: "panel" }, h("h2", {}, "This machine"), h("div", { class: "grid2" }, inp("Machine name (set once, keep it)", d, "device"), inp("Check for new articles every (minutes)", d, "pollMinutes", "number"), inp("Keep read articles for (days)", d, "retentionDays", "number")), chk("Write the weekly digest automatically", d, "autoDigest")), detectPanel()];
   else content = [h("div", { class: "panel" }, h("h2", {}, "Keyboard shortcuts"), h("div", { class: "keys" }, SHORTCUTS.map(([k, v]) => h("div", {}, h("span", {}, v), h("kbd", {}, k)))))];
   const needSave = tab === "connections" || tab === "ranking" || tab === "machine";
-  return [h("div", { class: "page" }, h("h1", {}, "Settings"),
-    S.settings && !S.settings.miniflux.token ? setupHero() : null,
-    h("div", { class: "stabs", role: "tablist" }, [["connections", "Connections"], ["look", "Look and reading"], ["ranking", "Ranking"], ["move", "Move setup"], ["machine", "This machine"], ["keys", "Shortcuts"]].map(([id, l]) => h("button", { class: "stab", role: "tab", "aria-selected": String(S.stab === id), onclick: () => { S.stab = id; renderMain(); } }, l))),
-    ...content,
-    needSave ? h("div", { class: "savebar" }, h("button", { class: "btn primary", "data-save": "1", disabled: S.dirty ? null : true, onclick: saveDraft }, "Save and test"), h("button", { class: "btn", "data-gofeed": "1", hidden: !(S.settings && S.settings.miniflux.token), onclick: () => go("feed") }, "Open Newsfeed"), h("span", { class: "note" }, S.dirty ? "You have unsaved changes." : "Nothing to save.")) : null)];
+  const connLamp = S.status ? worstOf(S.status.lights.filter(x => x.id === "miniflux" || x.id === "webdav").map(x => x.state)) : "off";
+  const fxl = S.fx ? (S.fx.error || !S.fx.readable ? "red" : worstOf(S.fx.parts.map(p => fxLine(p)[0]))) : null;
+  const tabs = folderTabs([{ id: "connections", label: "Connections", icon: "link", lamp: connLamp }, { id: "look", label: "Look and reading", icon: "palette" }, { id: "ranking", label: "Ranking", icon: "sliders" }, { id: "move", label: "Move setup", icon: "swap", lamp: fxl }, { id: "machine", label: "This machine", icon: "laptop", lamp: S.detect ? (S.detect.on ? "green" : "off") : null }, { id: "keys", label: "Shortcuts", icon: "keyboard" }], S.stab, (id) => { S.stab = id; renderMain(); }, "Settings sections");
+  return [h("div", { class: "page" }, pageHead("Settings", "Connections, the way it looks, and how this machine behaves."),
+    S.settings && !S.settings.miniflux.token ? setupHero() : null, tabs,
+    sheet(tab, ...content, needSave ? h("div", { class: "savebar" }, h("button", { class: "btn primary", "data-save": "1", disabled: S.dirty ? null : true, onclick: saveDraft }, "Save and test"), h("button", { class: "btn", "data-gofeed": "1", hidden: !(S.settings && S.settings.miniflux.token), onclick: () => go("feed") }, "Open Newsfeed"), h("span", { class: "note" }, S.dirty ? "You have unsaved changes." : "Nothing to save.")) : null))];
 }
 
 // ---------- moving a setup between machines ----------
