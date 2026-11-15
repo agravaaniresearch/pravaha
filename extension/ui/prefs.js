@@ -22,6 +22,11 @@ export const DEFAULTS = { theme: "auto", palette: "ember", density: "comfortable
 const KEY = "pravaha.ui";
 export function loadPrefs(fallbackTheme) {
   let p = {}; try { p = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch { /* ignore */ }
+  return normalisePrefs(p, fallbackTheme);
+}
+// Also used for preferences that arrive from another machine, so a damaged or odd value can never break the screen.
+export function normalisePrefs(p, fallbackTheme) {
+  p = p && typeof p === "object" ? p : {};
   const out = { ...DEFAULTS, ...(fallbackTheme && !p.theme ? { theme: fallbackTheme } : {}), ...p };
   out.readSize = clamp(out.readSize, 15, 26); out.readLine = clamp(out.readLine, 1.3, 2); out.readWidth = clamp(out.readWidth, 46, 90); out.anchor = out.anchor === true; out.anchorLevel = Math.round(clamp(out.anchorLevel, 1, 5));
   if (!["light", "dark", "oled", "auto"].includes(out.theme)) out.theme = "auto";

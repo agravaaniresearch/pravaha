@@ -25,6 +25,8 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Suggests tags locally.** Suggestions come from your own Raindrop tag vocabulary. No model and no network call is involved.
 - **Syncs two machines safely.** Every action is an event in an append-only log. Each machine writes only its own files, so they cannot overwrite each other. Merging is a set union, so the order of arrival never changes the result.
 - **Tells you the state in plain words.** Six status lights say what is working and what is left to sync.
+- **Moves your whole setup between machines.** Keys, settings, folder order and look travel through Firefox Sync by themselves; a new machine shows three set-up routes (Firefox Sync, a settings file, typing the keys) and then imports articles and reading history with a progress message. The settings file seals keys with a passphrase. Two installs with the same machine name are stopped before they can mix history.
+- **Never says "In sync" falsely.** With nothing connected the pill says "Not set up"; with only Miniflux it says "Miniflux in sync". Background polls are quiet and do not redraw the page.
 - **Writes a weekly digest** to the WebDAV folder as Markdown with Dataview front matter, for Obsidian.
 - **Accepts outside scores.** A Grok automation, or anything else, can write `enrich/results.json`. Pravaha blends 20 percent of that score with 80 percent of its own.
 
@@ -50,6 +52,13 @@ New in 0.3.0:
 | ![Reorder folders](docs/screenshots/14-reorder-folders.png)<br>**Reorder.** Move folders and feeds up and down. | ![Add a feed](docs/screenshots/15-add-feed.png)<br>**Add a feed.** Paste a site, pick a discovered feed and a folder. |
 | ![Bionic button](docs/screenshots/16-bionic-button-and-fonts.png)<br>**Bionic button** in the top bar and on the card. | ![Fonts and confirm settings](docs/screenshots/17-settings-fonts-and-confirm.png)<br>**Fonts and Marking read** settings. |
 | ![Font picker](docs/screenshots/18-font-picker.png)<br>**Font picker (0.3.1).** Serif and sans groups, each card in its own font. SF Pro and New York show "Not in this build" until you build them locally. | |
+
+New in 0.4.0 (these three were taken in real Firefox 160, with synthetic data):
+
+| | |
+|---|---|
+| ![Set up this machine](docs/screenshots/19-set-up-this-machine.png)<br>**Set up this machine.** A fresh install shows three routes and says "Not set up", never "In sync". | ![Move setup](docs/screenshots/20-move-setup.png)<br>**Move setup.** Firefox Sync status for each part, two switches, and the settings file below. |
+| ![After arrival](docs/screenshots/21-after-arrival.png)<br>**After arrival.** Keys, look and articles carried to the second machine, which then reads the history. | |
 
 ## Example run on synthetic data
 
@@ -199,11 +208,12 @@ No telemetry. Data goes only to servers you configure. Credentials are stored un
 
 ```
 npm install
-npm test            # 128 tests: engine, event log, sync, services, search, bulk marking, reader screen under jsdom
+npm test            # 143 tests: engine, event log, sync, services, search, bulk marking, reader screen under jsdom
 npm run lint        # Mozilla's web-ext lint
 node tools/failure-rates.mjs 150 --write
 node tools/example-run.mjs
 python3 tools/screenshots/shoot.py   # regenerates docs/screenshots (needs Chrome and playwright)
+node tools/firefox-e2e/serve.mjs 8799 & python3 tools/firefox-e2e/e2e.py   # real Firefox, two profiles (see DEPLOY.md, section 7)
 ```
 
 ## Install (short version)
@@ -214,7 +224,7 @@ See [DEPLOY.md](DEPLOY.md). The short version: download `pravaha.xpi` from the l
 
 ```
 npm install
-npm test                       # 128 tests
+npm test                       # 143 tests
 node tools/failure-rates.mjs   # random failure injection, see docs/FAILURE_RATES.md
 npm run lint                   # Mozilla's web-ext lint
 ```
@@ -223,7 +233,8 @@ The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. 
 
 ## What has not been verified
 
-- **Not run in a real Firefox.** The build has no Firefox binary. The code passes Mozilla's linter and the reader screen is tested under jsdom, but layout, fonts, scrolling and the browser APIs have not been exercised in a live browser. Read on scroll depends on Firefox's IntersectionObserver behaving as in the test.
+- **Real Firefox, with limits.** Since 0.4.0 the setup-moving, status and quiet-poll behaviour is exercised in real Firefox 160 (the base of Zen) with `tools/firefox-e2e/`. Zen itself, a long-running profile and the older 0.3.x screens (scroll behaviour, the right-click menu) have not been driven that way.
+- **Firefox Sync's cloud was not reached.** The e2e copies `storage.sync` items between profiles, which is what Firefox does, but real delivery, its timing, the size limits quoted in SCHEMA.md and the "Add-ons ticked" requirement come from documentation and are unverified.
 - **New Miniflux calls in 0.3.0 are untested against a real server.** `POST /discover`, `POST /feeds`, `POST /categories`, the `search` filter on `/entries`, and the chunked `PUT /entries` with a read-back check follow the documented API and are tested against fakes only. How Miniflux words its errors, and how long a new feed takes to fetch its first articles, are guesses from the documentation. If one misbehaves, the message shown is Miniflux's own.
 - **The right-click menu is untested in a real Firefox.** It uses the `menus` API and a `#subscribe=` address passed to the reader tab; the logic is tested, the menu itself has not been seen.
 - **The "some remain unread" fix is tested against a fake that drops ids.** The cause in your Miniflux is inferred from how the reader worked, not observed. The check afterwards is what makes the outcome visible either way.
@@ -231,7 +242,7 @@ The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. 
 - **Not run against real servers.** The Miniflux, Fastmail WebDAV and Raindrop calls follow their documented APIs and are tested against fakes only. The Miniflux `changed_after` filter is the least certain of them.
 - **Two machines can score slightly differently** until both hold the same Raindrop data, history snapshots and events. The order of articles is usually the same. Small differences in the number are expected.
 - **No Web Worker yet.** Scoring runs on the main thread of the background page. It is fast at a few thousand articles. A worker is a later step if it is ever needed.
-- **Keys stay on the machine by default.** Syncing them through Firefox Sync is an option, off by default. This departs from the Grok spec.
+- **Keys travel through Firefox Sync by default from 0.4.0**, with two switches to stop it. This departs from the Grok spec, which kept them local.
 
 ## Shortcuts
 

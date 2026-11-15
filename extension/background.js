@@ -1,6 +1,7 @@
 import { Engine } from "./src/engine.js";
 import { DwellTracker } from "./src/dwell.js";
 import { makeHandlers } from "./src/handlers.js";
+import { ProfileSync } from "./src/profilesync.js";
 
 const storage = { get: (k) => browser.storage.local.get(k), set: (o) => browser.storage.local.set(o) };
 const dwell = new DwellTracker();
@@ -20,13 +21,19 @@ const platform = {
 };
 const engine = new Engine({ storage, platform, onChange: () => browser.runtime.sendMessage({ type: "changed" }).catch(() => {}) });
 
+// Firefox Sync carries keys, settings and look between machines. A new machine takes them without being asked.
+const profile = new ProfileSync({
+  engine, area: browser.storage.sync,
+  onApplied: (applied) => { browser.runtime.sendMessage({ type: "profile", applied }).catch(() => {}); if (applied.some(a => a.part === "keys")) runSync(); }
+});
 const ready = (async () => {
   await engine.load();
-  // Optional: credentials carried by Firefox Sync (end-to-end encrypted) when the user has switched that on.
   try {
-    const s = (await browser.storage.sync.get("pravahaCreds")).pravahaCreds;
-    if (s && engine.settings.syncCreds && !engine.settings.miniflux.token) await engine.saveSettings({ miniflux: s.miniflux, webdav: s.webdav, raindrop: s.raindrop });
+    // 0.3.x kept only the keys, in one item, and only when a box was ticked. Take them if this machine has none.
+    const legacy = (await browser.storage.sync.get("pravahaCreds")).pravahaCreds;
+    if (legacy && legacy.miniflux && !engine.settings.miniflux.token) await engine.saveSettings({ miniflux: legacy.miniflux, webdav: legacy.webdav || {}, raindrop: legacy.raindrop || {} });
   } catch { /* Firefox Sync storage is optional */ }
+  try { await profile.reconcile(); } catch { /* the reader shows the problem on the Sync page */ }
   try { dwell.restore((await browser.storage.session.get("dwell")).dwell); } catch { /* session storage may be absent */ }
   await schedule();
 })();
@@ -36,12 +43,12 @@ async function schedule() {
   browser.alarms.create("poll", { delayInMinutes: 0.2, periodInMinutes: Math.max(1, engine.settings.pollMinutes || 2) });
 }
 async function saveDwell() { try { await browser.storage.session.set({ dwell: dwell.snapshot() }); } catch { /* ignore */ } }
-async function runSync() {
+async function runSync(opts) {
   if (syncing) return; syncing = true;
-  try { await engine.syncNow(); } finally { syncing = false; }
+  try { await engine.syncNow(opts); } finally { syncing = false; }
 }
 
-browser.alarms.onAlarm.addListener(async (a) => { if (a.name === "poll") { await ready; await runSync(); } });
+browser.alarms.onAlarm.addListener(async (a) => { if (a.name === "poll") { await ready; await runSync({ quiet: true }); } });
 browser.runtime.onInstalled.addListener(async () => { await ready; await schedule(); });
 browser.runtime.onStartup.addListener(async () => { await ready; await runSync(); });
 browser.action.onClicked.addListener(async () => {
@@ -82,9 +89,11 @@ browser.tabs.onRemoved.addListener(async (tabId) => {
 const handlers = makeHandlers({
   engine, runSync, schedule,
   openTab: async (r, id) => { const tab = await browser.tabs.create({ url: r.url, active: false }); dwell.track(tab.id, { id, feedId: r.feedId }, Date.now(), false); await saveDwell(); },
-  saveSynced: async (s) => {
-    try { if (s.syncCreds) await browser.storage.sync.set({ pravahaCreds: { miniflux: s.miniflux, webdav: s.webdav, raindrop: s.raindrop } }); else await browser.storage.sync.remove("pravahaCreds"); } catch { /* ignore */ }
-  }
+  profile
+});
+// Something arrived through Firefox Sync from another machine: take it if it is newer.
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === "sync" && Object.keys(changes).some(k => k.startsWith("pv:"))) ready.then(() => profile.pull()).catch(() => {});
 });
 browser.runtime.onMessage.addListener((m) => {
   if (!m || !handlers[m.type]) return;

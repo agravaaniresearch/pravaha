@@ -8,8 +8,8 @@ export function freshSyncState() {
 }
 
 export class Syncer {
-  constructor({ dav, log, device, root = "pravaha", now = () => Date.now(), state, localExtra = () => ({}) }) {
-    this.dav = dav; this.log = log; this.device = device; this.root = root; this.now = now;
+  constructor({ dav, log, device, installId = null, root = "pravaha", now = () => Date.now(), state, localExtra = () => ({}) }) {
+    this.installId = installId; this.nameClash = null; this.dav = dav; this.log = log; this.device = device; this.root = root; this.now = now;
     this.state = state || freshSyncState(); this.localExtra = localExtra; this._dirs = false;
   }
   pending() { return this.log.own().filter(e => Number(e.eid.split(":")[1]) > this.state.pushedSeq); }
@@ -25,21 +25,25 @@ export class Syncer {
 
   async pull() {
     const devices = (await this.dav.list(`${this.root}/events`)).filter(d => d !== this.device);
-    let pulled = 0;
+    let pulled = 0; const plan = [];
     for (const dev of devices) {
       const segs = (await this.dav.list(`${this.root}/events/${dev}`)).filter(n => /^\d{4}\.jsonl$/.test(n)).sort();
       const applied = (this.state.applied[dev] ||= {});
-      for (const seg of segs) {
-        if (applied[seg] >= SEGMENT_SIZE) continue;
-        const text = await this.dav.get(`${this.root}/events/${dev}/${seg}`);
-        if (text === null) continue;
-        const { events, corrupt } = parseSegment(text);
-        if (corrupt) this.state.corruptLines += corrupt;
-        pulled += this.log.merge(events);
-        applied[seg] = events.length;
-      }
-      this.state.remoteHeads[dev] = this.log.headOf(dev);
+      for (const seg of segs) if (!(applied[seg] >= SEGMENT_SIZE)) plan.push({ dev, seg });
     }
+    let done = 0;
+    for (const { dev, seg } of plan) {
+      if (this.onProgress) this.onProgress({ device: dev, done, total: plan.length });
+      const applied = (this.state.applied[dev] ||= {});
+      const text = await this.dav.get(`${this.root}/events/${dev}/${seg}`); done++;
+      if (text === null) continue;
+      const { events, corrupt } = parseSegment(text);
+      if (corrupt) this.state.corruptLines += corrupt;
+      pulled += this.log.merge(events);
+      applied[seg] = events.length;
+    }
+    for (const dev of devices) this.state.remoteHeads[dev] = this.log.headOf(dev);
+    if (this.onProgress && plan.length) this.onProgress({ device: null, done: plan.length, total: plan.length });
     this.state.lastPullOk = this.now();
     return { pulled, devices };
   }
@@ -61,9 +65,15 @@ export class Syncer {
     return pushed;
   }
 
+  // Two installs that share one machine name would write the same log. The state file carries a random install id so the second one notices.
+  async checkNameClash() {
+    this.nameClash = null; if (!this.installId) return;
+    try { const t = await this.dav.get(`${this.root}/state/${this.device}.json`); if (t) { const prev = JSON.parse(t); if (prev.installId && prev.installId !== this.installId) this.nameClash = { device: this.device, since: prev.updatedAt || null }; } } catch { /* a damaged state file is not a clash */ }
+  }
+
   async writeState(extra = {}) {
     const appliedHeads = {}; for (const d of Object.keys(this.state.remoteHeads)) appliedHeads[d] = this.state.remoteHeads[d];
-    const body = { device: this.device, updatedAt: this.now(), head: this.log.headOf(this.device), pushedSeq: this.state.pushedSeq, appliedHeads, ...this.localExtra(), ...extra };
+    const body = { device: this.device, installId: this.installId, updatedAt: this.now(), head: this.log.headOf(this.device), pushedSeq: this.state.pushedSeq, appliedHeads, ...this.localExtra(), ...extra };
     await this.dav.put(`${this.root}/state/${this.device}.json`, JSON.stringify(body));
   }
 
@@ -82,10 +92,12 @@ export class Syncer {
 
   // One full pass: pull, push, publish this machine's state. Never throws; the outcome is in the report.
   async sync() {
-    const report = { ok: false, pulled: 0, pushed: 0, pending: this.pending().length, others: {}, error: null };
+    const report = { ok: false, devices: [], pulled: 0, pushed: 0, pending: this.pending().length, others: {}, error: null };
     try {
       await this.ensureDirs();
-      const p = await this.pull(); report.pulled = p.pulled;
+      await this.checkNameClash();
+      if (this.nameClash) throw new PlainError(`Another machine is already using the name "${this.device}". Give this one its own name in Settings, then sync again. Nothing was written, so no history was mixed up.`, "name-clash");
+      const p = await this.pull(); report.pulled = p.pulled; report.devices = p.devices;
       report.pushed = await this.push();
       await this.writeState();
       report.others = await this.readOtherStates();

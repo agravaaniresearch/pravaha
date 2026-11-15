@@ -5,16 +5,18 @@ import { JSDOM } from "jsdom";
 import { Engine, MemoryStorage } from "../extension/src/engine.js";
 import { makeHandlers } from "../extension/src/handlers.js";
 import { world, settings, entry } from "./helpers.mjs";
+import { ProfileSync } from "../extension/src/profilesync.js";
 
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 const until = async (fn, ms = 6000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await wait(40); } return !!fn(); };
 let n = 0;
-async function mount({ prep, noToken = false, prefs = null, fontProbe = null } = {}) {
+const syncArea = () => { const m = new Map(); return { m, get: async (keys) => Object.fromEntries(keys.filter(k => m.has(k)).map(k => [k, JSON.parse(JSON.stringify(m.get(k)))])), set: async (o) => { for (const [k, v] of Object.entries(o)) m.set(k, JSON.parse(JSON.stringify(v))); } }; };
+async function mount({ prep, noToken = false, prefs = null, fontProbe = null, area = syncArea() } = {}) {
   const w = await world(); if (prep) prep(w);
   const storage = new MemoryStorage(); await storage.set({ settings: settings("laptop", noToken ? { miniflux: { url: "https://mf.test", token: "" } } : {}) });
   const listeners = []; const opened = [];
   const engine = new Engine({ storage, fetchImpl: w.fetchImpl, onChange: () => listeners.forEach(f => f({ type: "changed" })) }); await engine.load(); if (!noToken) await engine.syncNow();
-  const handlers = makeHandlers({ engine, fetchImpl: w.fetchImpl, runSync: () => engine.syncNow(), schedule: async () => {}, openTab: async (r) => { opened.push(r.url); }, saveSynced: async () => {} });
+  const handlers = makeHandlers({ engine, fetchImpl: w.fetchImpl, runSync: () => engine.syncNow(), schedule: async () => {}, openTab: async (r) => { opened.push(r.url); }, profile: new ProfileSync({ engine, area }) });
   const dom = new JSDOM('<!doctype html><html data-theme="auto"><body><div id="app"></div></body></html>', { url: "http://pravaha.test/ui/reader.html", pretendToBeVisual: true });
   const win = dom.window; win.HTMLElement.prototype.scrollIntoView = () => {}; win.matchMedia = () => ({ matches: false, addEventListener() {} }); if (fontProbe) win.document.fonts = { load: async (spec) => fontProbe(spec) };
   const ios = []; win.IntersectionObserver = class { constructor(cb) { this.cb = cb; this.els = new Set(); ios.push(this); } observe(e) { this.els.add(e); } disconnect() { this.els.clear(); } };
@@ -26,7 +28,7 @@ async function mount({ prep, noToken = false, prefs = null, fontProbe = null } =
   await import(`../extension/ui/reader.js?run=${++n}`); await wait(120);
   const $ = (s) => win.document.querySelector(s); const $$ = (s) => [...win.document.querySelectorAll(s)];
   const key = (k, o = {}) => win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: k, bubbles: true, ...o }));
-  return { w, engine, win, $, $$, key, opened, ios, perms, close: () => win.close() };
+  return { w, engine, win, area, $, $$, key, opened, ios, perms, close: () => win.close() };
 }
 const rowByTitle = (t, text) => t.$$(".row").find(r => r.querySelector(".rtitle").textContent.includes(text));
 
@@ -120,7 +122,7 @@ test("Settings: WebDAV test writes and reads back a file; a custom server asks f
 test("Settings tabs, Stats and Sync pages render without errors", async () => {
   const t = await mount(); const tab = (name) => t.$$(".tab").find(b => b.textContent.includes(name)).click();
   tab("Stats"); await wait(120); assert.ok(t.$$(".stat").length >= 5); tab("Sync"); await wait(120); assert.ok(t.$$(".light").length >= 5); assert.ok(t.$(".hero"));
-  tab("Settings"); await wait(60); for (const s of ["Look and reading", "Ranking", "This machine", "Shortcuts", "Connections"]) { t.$$(".stab").find(b => b.textContent === s).click(); assert.ok(t.$(".page .panel, .page .conns")); } t.close();
+  tab("Settings"); await wait(60); for (const s of ["Look and reading", "Ranking", "Move setup", "This machine", "Shortcuts", "Connections"]) { t.$$(".stab").find(b => b.textContent === s).click(); assert.ok(t.$(".page .panel, .page .conns")); } t.close();
 });
 test("a background change shows a banner for new articles instead of reshuffling the list", async () => {
   const t = await mount(); const before = t.$$(".row").length;
@@ -282,4 +284,37 @@ test("an Apple font missing from this build is shown as unavailable and cannot b
   const sf = t.$$(".fontcard").filter(c => c.querySelector(".fname").textContent.startsWith("SF Pro")); assert.equal(sf.length, 2); assert.ok(sf.every(c => c.disabled && /apple-fonts/.test(c.textContent)), "SF Pro is disabled with the fix named");
   const ny = t.$$(".fontcard").filter(c => c.querySelector(".fname").textContent.startsWith("New York")); assert.ok(ny.every(c => !c.disabled), "New York, which loaded, stays available");
   t.$(".aa").click(); const rf = t.$(".pop select"); assert.ok([...rf.options].find(o => o.value === "sfpro").disabled, "the popover disables it too"); t.close();
+});
+
+// ---------- 0.4.0: moving a setup ----------
+const openMove = async (t) => { t.$$(".tab").find(b => b.textContent.includes("Settings")).click(); await wait(60); t.$$(".stab").find(b => b.textContent === "Move setup").click(); await wait(80); };
+test("a machine with no keys shows the three set-up routes, and Fetch brings in what Firefox Sync holds", async () => {
+  const area = syncArea(); area.m.set("pv:keys", { v: 1, at: 5000, by: "laptop", data: { miniflux: { url: "https://mf.test", token: "good-key" }, webdav: { url: "https://dav.test", user: "u", pass: "p", root: "pravaha" }, raindrop: { token: "rd-token" } } });
+  const t = await mount({ noToken: true, area }); const routes = t.$$(".hero.setup .route"); assert.equal(routes.length, 3);
+  assert.equal(t.$(".pill").textContent.includes("In sync"), false, "never says In sync with nothing connected");
+  t.$(".hero.setup [data-act='fx-pull']").click(); await wait(400);
+  assert.equal(t.engine.settings.miniflux.token, "good-key"); assert.equal(t.$(".hero.setup"), null, "the set-up routes go away once keys arrive"); t.close();
+});
+test("Move setup: Firefox Sync panel lists each part, sends, and the toggles are saved", async () => {
+  const t = await mount(); await openMove(t); const rows = t.$$("[data-fx] .fxrow"); assert.equal(rows.length, 4);
+  t.$("[data-fx] [data-act='fx-push']").click(); await wait(250);
+  assert.deepEqual([...t.area.m.keys()].sort(), ["pv:keys", "pv:order", "pv:settings", "pv:ui"].filter(k => t.area.m.has(k)).sort()); assert.ok(t.area.m.has("pv:keys") && t.area.m.has("pv:settings"));
+  const box = t.$$("[data-fx] .check input")[0]; box.checked = false; box.dispatchEvent(new t.win.Event("change", { bubbles: true })); await wait(120);
+  assert.equal(t.engine.settings.sync.keys, false); t.close();
+});
+test("Move setup: export asks for a passphrase when keys are included; the file carries no clear key; import takes it back", async () => {
+  const t = await mount(); await openMove(t); let saved = null;
+  URL.createObjectURL = (b) => { saved = b; return "blob:x"; }; t.win.HTMLAnchorElement.prototype.click = function () {};
+  const keysBox = t.$("[data-exp='keys']"); keysBox.checked = true; keysBox.dispatchEvent(new t.win.Event("change", { bubbles: true })); await wait(40);
+  t.$("[data-act='export']").click(); await wait(150); assert.equal(saved, null, "no file without a passphrase");
+  const pw = t.$("[data-exp='pass']"); pw.value = "open sesame"; pw.dispatchEvent(new t.win.Event("input", { bubbles: true }));
+  t.$("[data-act='export']").click(); await wait(300); assert.ok(saved, "a file was produced");
+  const text = await saved.text(); assert.ok(!text.includes("good-key")); assert.equal(JSON.parse(text).format, "pravaha-settings");
+  const u = await mount({ noToken: true }); await openMove(u);
+  const input = u.$("[data-act='import-file']"); const file = new u.win.File([text], "s.json", { type: "application/json" });
+  Object.defineProperty(input, "files", { value: [file] }); input.dispatchEvent(new u.win.Event("change", { bubbles: true })); await wait(150);
+  assert.ok(u.$("[data-imp='pass']"), "a passphrase box appears for a file with keys");
+  u.$("[data-act='import']").click(); await wait(200); assert.equal(u.engine.settings.miniflux.token, "", "wrong or missing passphrase changes nothing");
+  const ip = u.$("[data-imp='pass']"); ip.value = "open sesame"; ip.dispatchEvent(new u.win.Event("input", { bubbles: true })); u.$("[data-act='import']").click(); await wait(500);
+  assert.equal(u.engine.settings.miniflux.token, "good-key"); t.close(); u.close();
 });

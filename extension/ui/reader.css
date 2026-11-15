@@ -371,3 +371,15 @@ mark { background: color-mix(in srgb, var(--amber) 55%, transparent); color: inh
 .fontcard .fname i { font: 12px var(--ui); font-style: normal; color: var(--accent); }
 .fontcard .fsample { font-size: 15px; line-height: 1.4; color: var(--text); }
 .fontcard .fnote { font: 12px/1.35 var(--ui); color: var(--muted); }
+
+/* Move setup and the set-up hero */
+.fxrows { display: grid; gap: 6px; margin: 8px 0 12px; }
+.fxrow { display: grid; grid-template-columns: 14px 130px 1fr; gap: 10px; align-items: baseline; }
+.fxrow .lamp { margin-top: 2px; }
+.dfoot.left { justify-content: flex-start; margin: 10px 0 4px; flex-wrap: wrap; }
+.panel h3 { margin: 16px 0 6px; font-size: 14px; }
+.hero.setup .routes { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-top: 10px; }
+.hero.setup .route { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
+.hero.setup .route h3 { margin: 0 0 4px; font-size: 14px; }
+.hero.setup .route p { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.note.bad { color: var(--bad, #d9604b); }

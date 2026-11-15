@@ -3,7 +3,7 @@ import { h, icon, pct, ago, longAgo } from "./dom.js";
 import { gradeColor, disp } from "../src/grade.js";
 import { renderSafe } from "../src/safehtml.js";
 import { anchorTree } from "../src/anchor.js";
-import { loadPrefs, savePrefs, applyPrefs, clamp, READ_FONTS, UI_FONTS, FONT_INFO, CONFIRM_MODES } from "./prefs.js";
+import { loadPrefs, normalisePrefs, savePrefs, applyPrefs, clamp, READ_FONTS, UI_FONTS, FONT_INFO, CONFIRM_MODES } from "./prefs.js";
 
 const $app = document.getElementById("app");
 const MUTATING = new Set(["markRead", "markUnread", "markScope", "save", "dismiss", "undismissAll", "syncNow", "subscribe", "searchServer", "card", "open"]);
@@ -24,7 +24,18 @@ export const S = {
 };
 let U = loadPrefs();
 const prefersDark = () => !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
-const setPref = (patch) => { U = { ...U, ...patch }; savePrefs(U); applyPrefs(U, document.documentElement, prefersDark()); if ("anchor" in patch || "anchorLevel" in patch) { refillOpenCard(); anchorSamples(); } };
+let uiPushT = null;
+const pushUi = () => { clearTimeout(uiPushT); uiPushT = setTimeout(() => { try { localStorage.setItem("pravaha.ui.at", String(Date.now())); } catch { /* ignore */ } send({ type: "saveUi", ui: U }).catch(() => {}); }, 500); };
+// Look and fonts chosen on another machine arrive in settings.ui; take them when they are newer than what this reader last saved.
+function adoptRemoteUi(settings) {
+  const r = settings && settings.ui; if (!r || typeof r !== "object") return false;
+  const next = normalisePrefs(r); if (JSON.stringify(next) === JSON.stringify(U)) return false;
+  const at = Number(((settings.syncMeta || {}).ui || {}).at || 0); let local = 0; try { local = Number(localStorage.getItem("pravaha.ui.at") || 0); } catch { /* ignore */ }
+  if (at <= local) return false;
+  U = next; savePrefs(U); try { localStorage.setItem("pravaha.ui.at", String(at)); } catch { /* ignore */ }
+  applyPrefs(U, document.documentElement, prefersDark()); return true;
+}
+const setPref = (patch) => { U = { ...U, ...patch }; savePrefs(U); pushUi(); applyPrefs(U, document.documentElement, prefersDark()); if ("anchor" in patch || "anchorLevel" in patch) { refillOpenCard(); anchorSamples(); } };
 function anchorSamples() { for (const el of $app.querySelectorAll("[data-sample]")) { el.textContent = el.dataset.sample; if (U.anchor) anchorTree(el, U.anchorLevel, document); } }
 function refillOpenCard() { const r = S.openCard && S.rows.get(S.openCard); if (r && rowElById(r.id)) fillCard(r); }
 export const disposeForTests = () => { clearTimeout(pollT); for (const t of toastTimers) clearTimeout(t); };
@@ -80,12 +91,13 @@ async function loadView() {
 async function boot() {
   const b = await send({ type: "boot" });
   S.settings = b.settings; S.tree = b.tree; S.status = b.status; S.rules = b.rules || []; S.icons = b.icons || {}; S.iconCount = Object.keys(S.icons).length;
-  U = loadPrefs(b.settings.theme); applyPrefs(U, document.documentElement, prefersDark());
+  U = loadPrefs(b.settings.theme); const tookUi = adoptRemoteUi(b.settings); applyPrefs(U, document.documentElement, prefersDark());
   if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyPrefs(U, document.documentElement, prefersDark()));
   probeFonts();
   if (!b.settings.miniflux.token) S.tab = "settings";
   if (isFeedTab()) await loadView(); else render();
-  handleHash(); kickSync();
+  handleHash(); kickSync(); loadFx();
+  if (tookUi) toast("Look and fonts brought in from Firefox Sync.", { kind: "success" });
 }
 // Cheap refresh of counts and lights after local actions.
 const refreshChrome = debounce(async () => {
@@ -109,7 +121,25 @@ const softReload = debounce(async () => {
   if (r.view.iconCount !== S.iconCount) { S.iconCount = r.view.iconCount; S.icons = (await send({ type: "icons" })) || {}; }
   renderChrome(); showBanner();
 }, 400);
-browser.runtime.onMessage.addListener((m) => { if (m && m.type === "changed") { softReload(); kickSync(); } });
+browser.runtime.onMessage.addListener((m) => { if (m && m.type === "changed") { softReload(); kickSync(); } else if (m && m.type === "profile") onProfile(m.applied || []); });
+const PART_WORDS = { keys: "keys", settings: "settings", order: "folder order", ui: "look and fonts" };
+const since = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 45 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; };
+// Something arrived from another machine through Firefox Sync.
+async function onProfile(applied) {
+  try {
+    const b = await send({ type: "boot" }); const hadKeys = !!(S.settings && S.settings.miniflux.token); S.settings = b.settings; S.tree = b.tree; S.status = b.status; S.draft = null; adoptRemoteUi(b.settings);
+    const by = [...new Set(applied.map(a => a.by).filter(Boolean))].join(", ");
+    toast(`Brought in ${applied.map(a => PART_WORDS[a.part] || a.part).join(", ")} from Firefox Sync${by ? ` (saved by ${by})` : ""}.`, { kind: "success", action: !hadKeys && S.settings.miniflux.token ? { label: "Open Newsfeed", fn: () => go("feed") } : null });
+    if (S.tab === "settings") render(); else renderChrome();
+    loadFx();
+  } catch { /* the background page will tell the reader again on the next change */ }
+}
+async function loadFx() { try { S.fx = await send({ type: "profileSync" }); } catch { S.fx = null; } if (S.tab === "sync" || (S.tab === "settings" && (S.stab === "move" || (S.settings && !S.settings.miniflux.token)))) renderMain(); }
+function noteImport(st) {
+  const im = st && st.imported; if (!im || S.importSeen === im.at) return; const first = S.importSeen === undefined; S.importSeen = im.at;
+  if (first && Date.now() - im.at > 20000) return; // an old import, from before this page opened
+  toast(`Brought in ${im.events.toLocaleString()} reading-history change${im.events === 1 ? "" : "s"} from ${im.devices.join(", ") || "other machines"}.`, { kind: "success" });
+}
 
 // ---------- sync indicator ----------
 let pollT = null, wasBusy = false;
@@ -125,7 +155,7 @@ function kickSync() { if (!pollT) pollT = setTimeout(pollSync, 120); }
 function clearPendingDots() { for (const r of S.rows.values()) if (r.pending) { r.pending = false; const el = rowElById(r.id); if (el) { el.dataset.pending = "false"; el.querySelector(".pdot")?.remove(); } } }
 function pillEl() {
   const st = S.status; const overall = st ? st.overall : "off"; const a = st && st.activity; const pend = st ? st.pendingCount || 0 : 0;
-  let state = "idle"; let text = overall === "green" ? "In sync" : overall === "red" ? "Needs attention" : overall === "amber" ? "Catching up" : "Not set up"; let sub = ""; let lamp = h("span", { class: "lamp " + overall + (overall === "green" ? " pulse" : "") });
+  let state = "idle"; let text = overall === "green" ? (st && st.scope === "miniflux" ? "Miniflux in sync" : "In sync") : overall === "red" ? "Needs attention" : overall === "amber" ? "Catching up" : "Not set up"; let sub = ""; let lamp = h("span", { class: "lamp " + overall + (overall === "green" ? " pulse" : "") });
   if (a || S.busy) { state = "syncing"; text = a ? a.label : "Syncing with Miniflux"; sub = a && a.total ? `${Math.min(a.done, a.total)} of ${a.total}` : ""; lamp = h("span", { class: "spin" }); }
   else if (pend > 0 && !mfRed()) { state = "syncing"; text = "Sending to Miniflux"; sub = `${pend} waiting`; lamp = h("span", { class: "spin" }); }
   else if (S.syncFlash > Date.now()) { state = "synced"; text = "Synced with Miniflux"; lamp = icon("check", 14); }
@@ -448,7 +478,7 @@ function go(tab) {
   stopDwell(); dw.id = null; S.openCard = null; S.tab = tab; lsSet("pravaha.tab", tab); S.keep = new Set(); S.pop = null;
   if (tab === "feed" || tab === "saved") loadView();
   else if (tab === "stats") Promise.all([send({ type: "stats" }), send({ type: "rules" })]).then(([st, ru]) => { S.stats = st; S.rules = ru; render(); });
-  else if (tab === "sync") Promise.all([send({ type: "status" }), send({ type: "stats" })]).then(([st, sa]) => { S.status = st; S.stats = sa; render(); });
+  else if (tab === "sync") Promise.all([send({ type: "status" }), send({ type: "stats" })]).then(([st, sa]) => { S.status = st; S.stats = sa; render(); loadFx(); });
   else { S.draft = null; render(); }
 }
 function topBar() {
@@ -495,6 +525,7 @@ function keepSearchFocus(fn) {
   if (keep !== null) { const i = $app.querySelector(".search input"); if (i) { i.focus(); try { i.setSelectionRange(keep, keep); } catch { /* ignore */ } } }
 }
 function renderChrome() {
+  noteImport(S.status);
   const body = $app.querySelector(".body"); if (!body) return render();
   keepSearchFocus(() => { $app.querySelector(".top")?.replaceWith(topBar()); const side = body.querySelector(".side"); if (side) side.replaceWith(sideBar()); body.dataset.side = U.side ? "on" : "off"; });
 }
@@ -590,7 +621,7 @@ function syncMain() {
       h("p", {}, `${n ? `${n} change${n === 1 ? "" : "s"} still to sync` : "Nothing left to sync"}${machines.length ? `. Other machines: ${machines.map(m => m.device || "machine").join(", ")}.` : "."}`)),
       st.activity ? h("p", { class: "note" }, `${st.activity.label}${st.activity.total ? `: ${Math.min(st.activity.done, st.activity.total)} of ${st.activity.total}` : ""}`) : null,
       h("button", { class: "btn primary", onclick: syncNow }, icon("sync", 15), S.busy ? "Syncing" : "Sync now"), h("button", { class: "btn", onclick: async () => { const r = await send({ type: "digest" }); toast(r.sentence); } }, "Write digest now")),
-    h("div", { class: "panel" }, lights), h("div", { class: "panel" }, h("h2", {}, "Changes waiting over time"), spark))];
+    h("div", { class: "panel" }, lights), h("div", { class: "panel" }, h("h2", {}, "Changes waiting over time"), spark), fxCard())];
 }
 
 // ---------- settings ----------
@@ -616,13 +647,25 @@ function markDirty() { S.dirty = true; const b = $app.querySelector(".savebar [d
 async function saveDraft() {
   const d = ensureDraft(); const origins = [...new Set(["miniflux", "webdav"].map(w => customOrigin(d[w].url)).filter(Boolean))];
   const granted = origins.length ? await browser.permissions.request({ origins }) : true;
-  const patch = { miniflux: d.miniflux, webdav: d.webdav, raindrop: d.raindrop, weights: d.weights, novelty: d.novelty, pollMinutes: Number(d.pollMinutes) || 2, retentionDays: Number(d.retentionDays) || 30, autoTag: d.autoTag, saveToRaindrop: d.saveToRaindrop, autoDigest: d.autoDigest, syncCreds: d.syncCreds, device: (d.device || "this-machine").trim() };
+  const patch = { miniflux: d.miniflux, webdav: d.webdav, raindrop: d.raindrop, weights: d.weights, novelty: d.novelty, pollMinutes: Number(d.pollMinutes) || 2, retentionDays: Number(d.retentionDays) || 30, autoTag: d.autoTag, saveToRaindrop: d.saveToRaindrop, autoDigest: d.autoDigest, device: (d.device || S.settings.device || "").trim() || S.settings.device };
   S.settings = await send({ type: "saveSettings", patch }); S.draft = null; ensureDraft(); S.dirty = false;
   const b = $app.querySelector(".savebar [data-save]"); if (b) b.disabled = true; const t = $app.querySelector(".savebar .note"); if (t) t.textContent = granted ? "Saved. Testing each connection now." : "Saved, but Firefox did not allow your custom server.";
   const results = await Promise.all(["miniflux", "webdav", "raindrop"].filter(w => complete(w, S.draft)).map(w => runTest(w, false)));
   if (t && S.draft.miniflux.token) t.textContent = results.every(Boolean) ? "Saved. Every connection answered." : "Saved. See the lights above for any connection that needs a fix.";
   if (results[0]) { const go1 = $app.querySelector("[data-gofeed]"); if (go1) go1.hidden = false; }
 }
+// Shown on a machine with no keys: the three ways to set it up, with what Firefox Sync holds right now.
+function setupHero() {
+  const fx = S.fx; const found = fx ? fx.parts.filter(p => p.remote) : []; const by = found.length ? found[0].remote.by : "";
+  const fxText = !fx ? "Looking in Firefox Sync." : !fx.readable ? "Firefox Sync storage could not be read in this browser." : found.length ? `Found a setup saved${by ? ` by ${by}` : ""} ${since(Math.max(...found.map(p => p.remote.at)))}. It is applied automatically; if it has not appeared, press Fetch.` : "Nothing yet. On your other machine open Settings, Move setup and press Send. Firefox Sync must be signed in here with Add-ons ticked, and can take a few minutes.";
+  return h("div", { class: "hero setup" }, h("h2", {}, "Set up this machine"),
+    h("p", {}, "Pick whichever is easiest. Everything arrives the same way: keys first, then your articles from Miniflux, then your reading history from the WebDAV storage."),
+    h("div", { class: "routes" },
+      h("div", { class: "route", "data-route": "firefox-sync" }, h("h3", {}, "1. From Firefox Sync"), h("p", {}, fxText), h("button", { class: "btn", "data-act": "fx-pull", onclick: () => fxAct("pull", false) }, "Check Firefox Sync now")),
+      h("div", { class: "route", "data-route": "file" }, h("h3", {}, "2. From a settings file"), h("p", {}, "Made on your other machine with Settings, Move setup, Export."), h("button", { class: "btn", "data-act": "go-move", onclick: () => { S.stab = "move"; renderMain(); } }, "Import a file")),
+      h("div", { class: "route", "data-route": "type" }, h("h3", {}, "3. Type the keys"), h("p", {}, "Paste your Miniflux address and API key below. Each connection is tested as soon as its boxes are filled."))));
+}
+
 function settingsMain() {
   const d = ensureDraft(); const tab = S.stab;
   const inp = (label, obj, key, type = "text", w = null, ph = "") => h("label", { class: "field" }, label, h("input", { type, value: obj[key] ?? "", placeholder: ph, autocomplete: "off", spellcheck: "false", oninput: (e) => { obj[key] = type === "number" ? Number(e.target.value) : e.target.value; markDirty(); if (w) queueTest(w); } }));
@@ -635,7 +678,7 @@ function settingsMain() {
     conn("miniflux", [inp("Server address", d.miniflux, "url", "text", "miniflux"), inp("API key", d.miniflux, "token", "password", "miniflux")], "Miniflux, Settings, API Keys. Tested as soon as both boxes are filled."),
     conn("webdav", [inp("Server address", d.webdav, "url", "text", "webdav"), inp("User name", d.webdav, "user", "text", "webdav"), inp("App password", d.webdav, "pass", "password", "webdav"), inp("Folder", d.webdav, "root", "text", "webdav")], "Fastmail app password with Files access. The test writes a small file."),
     conn("raindrop", [inp("API token", d.raindrop, "token", "password", "raindrop")], "Optional. Gives tag suggestions and one-way saving.")),
-    chk("Carry these keys between my machines with Firefox Sync", d, "syncCreds"), chk("Save starred articles to Raindrop", d, "saveToRaindrop"), chk("Suggest tags from my Raindrop tags", d, "autoTag")];
+    h("p", { class: "note" }, "Keys, settings and look travel between your machines through Firefox Sync by themselves. See ", h("a", { href: "#", onclick: (e) => { e.preventDefault(); S.stab = "move"; renderMain(); } }, "Move setup"), " to check, send or fetch them, or to use a settings file instead."), chk("Save starred articles to Raindrop", d, "saveToRaindrop"), chk("Suggest tags from my Raindrop tags", d, "autoTag")];
   else if (tab === "look") content = [h("div", { class: "panel" }, h("h2", {}, "Look"),
     h("div", { class: "grid2" }, h("div", { class: "field" }, "Theme", h("div", { class: "seg" }, THEMES.map(t => h("button", { "aria-pressed": String(U.theme === t), onclick: (e) => { setPref({ theme: t }); renderMain(); renderChrome(); } }, THEME_NAMES[t].split(" ")[0])))),
       h("div", { class: "field" }, "Relevance colours", h("div", { class: "seg" }, ["ember", "saffron", "moss"].map(p => h("button", { "aria-pressed": String(U.palette === p), onclick: () => { setPref({ palette: p }); renderMain(); } }, p[0].toUpperCase() + p.slice(1))))),
@@ -653,15 +696,81 @@ function settingsMain() {
       h("div", { class: "sample prose" }, h("p", { "data-sample": "Reading is a daily discipline. A comfortable measure, a generous line gap and a calm serif let a long article carry you along without effort." }, "Reading is a daily discipline. A comfortable measure, a generous line gap and a calm serif let a long article carry you along without effort."), h("p", { "data-sample": "Changes apply instantly and stay on this machine." }, "Changes apply instantly and stay on this machine.")))];
   else if (tab === "ranking") content = [h("div", { class: "panel" }, h("h2", {}, "Relevance weights"), ...[["tag", "Tag match"], ["echo", "Sites you read"], ["authority", "Feed standing"], ["freshness", "Freshness"]].map(([k, l]) => { const out = h("span", {}, pct(d.weights[k])); return h("label", { class: "range" }, h("span", {}, l), h("input", { type: "range", min: 0, max: 1, step: 0.05, value: d.weights[k], oninput: (e) => { d.weights[k] = Number(e.target.value); out.textContent = pct(d.weights[k]); markDirty(); } }), out); }),
     h("p", { class: "note" }, "Only the proportions matter. They are rescaled to add up to one when saved."), chk("Boost feeds I have not opened this session", d, "novelty"))];
+  else if (tab === "move") content = moveMain();
   else if (tab === "machine") content = [h("div", { class: "panel" }, h("h2", {}, "This machine"), h("div", { class: "grid2" }, inp("Machine name (set once, keep it)", d, "device"), inp("Check for new articles every (minutes)", d, "pollMinutes", "number"), inp("Keep read articles for (days)", d, "retentionDays", "number")), chk("Write the weekly digest automatically", d, "autoDigest"))];
   else content = [h("div", { class: "panel" }, h("h2", {}, "Keyboard shortcuts"), h("div", { class: "keys" }, SHORTCUTS.map(([k, v]) => h("div", {}, h("span", {}, v), h("kbd", {}, k)))))];
   const needSave = tab === "connections" || tab === "ranking" || tab === "machine";
   return [h("div", { class: "page" }, h("h1", {}, "Settings"),
-    S.settings && !S.settings.miniflux.token ? h("div", { class: "hero" }, h("div", {}, h("h2", {}, "Start here"), h("p", {}, "Paste your Miniflux address and API key. Each connection is tested the moment its boxes are filled, and again when you save."))) : null,
-    h("div", { class: "stabs", role: "tablist" }, [["connections", "Connections"], ["look", "Look and reading"], ["ranking", "Ranking"], ["machine", "This machine"], ["keys", "Shortcuts"]].map(([id, l]) => h("button", { class: "stab", role: "tab", "aria-selected": String(S.stab === id), onclick: () => { S.stab = id; renderMain(); } }, l))),
+    S.settings && !S.settings.miniflux.token ? setupHero() : null,
+    h("div", { class: "stabs", role: "tablist" }, [["connections", "Connections"], ["look", "Look and reading"], ["ranking", "Ranking"], ["move", "Move setup"], ["machine", "This machine"], ["keys", "Shortcuts"]].map(([id, l]) => h("button", { class: "stab", role: "tab", "aria-selected": String(S.stab === id), onclick: () => { S.stab = id; renderMain(); } }, l))),
     ...content,
     needSave ? h("div", { class: "savebar" }, h("button", { class: "btn primary", "data-save": "1", disabled: S.dirty ? null : true, onclick: saveDraft }, "Save and test"), h("button", { class: "btn", "data-gofeed": "1", hidden: !(S.settings && S.settings.miniflux.token), onclick: () => go("feed") }, "Open Newsfeed"), h("span", { class: "note" }, S.dirty ? "You have unsaved changes." : "Nothing to save.")) : null)];
 }
+
+// ---------- moving a setup between machines ----------
+const FX_NAMES = { keys: "Keys", settings: "Settings", order: "Folder order", ui: "Look and fonts" };
+function fxLine(p) {
+  const by = p.remote && p.remote.by ? ` by ${p.remote.by}` : "";
+  if (p.state === "absent") return ["off", "Nothing in Firefox Sync yet."];
+  if (p.state === "level") return ["green", `In step. Saved${by} ${since(p.remote.at)}.`];
+  if (p.state === "remote-newer") return ["amber", `A newer copy${by} (${since(p.remote.at)}) is waiting. Fetch it below.`];
+  return ["amber", "This machine has newer changes that Firefox Sync has not received. Send them below."];
+}
+async function fxAct(kind, force) {
+  const r = await send({ type: kind === "pull" ? "profilePull" : "profilePush", force });
+  if (!r) { toast("Firefox Sync is not available in this browser.", { kind: "error" }); return; }
+  S.fx = r.summary;
+  if (kind === "pull") {
+    if (r.error) toast(r.error, { kind: "error" });
+    else if (!r.applied.length) toast(Object.keys(r.found).length ? "This machine already has everything that Firefox Sync holds." : "Firefox Sync holds nothing for Pravaha yet. On your other machine, open Settings, Move setup and press Send. Firefox Sync can take a few minutes to deliver it.", { kind: "info" });
+    else { const b = await send({ type: "boot" }); S.settings = b.settings; S.tree = b.tree; S.status = b.status; S.draft = null; adoptRemoteUi(b.settings); toast(`Took ${r.applied.map(a => PART_WORDS[a.part]).join(", ")} from Firefox Sync.`, { kind: "success" }); }
+  } else toast(r.error ? r.error : r.sent && r.sent.length ? `Sent ${r.sent.map(x => PART_WORDS[x]).join(", ")} to Firefox Sync. It reaches your other machines after Firefox's next sync.` : "Nothing to send yet. Fill in Connections first.", { kind: r.error ? "warn" : "success" });
+  renderMain(); if (kind === "pull") renderChrome();
+}
+function fxCard() {
+  const fx = S.fx; const s = S.settings;
+  const rows = fx ? fx.parts.map(p => { const [lamp, text] = fxLine(p); return h("div", { class: "fxrow" }, h("span", { class: "lamp " + lamp }), h("b", {}, FX_NAMES[p.part]), h("span", {}, text)); }) : [h("p", { class: "note" }, "Reading Firefox Sync.")];
+  const tog = (label, key) => h("label", { class: "check" }, h("input", { type: "checkbox", checked: s.sync[key] !== false, onchange: async (e) => { S.settings = await send({ type: "saveSettings", patch: { sync: { [key]: e.target.checked } } }); loadFx(); } }), label);
+  return h("div", { class: "panel", "data-fx": "1" }, h("h2", {}, "Firefox Sync"),
+    h("p", {}, "Your keys, settings, folder order and look travel to your other machines through Firefox Sync, which encrypts them end to end. A new machine takes them by itself the first time they arrive. Reading history does not use this route; it travels through the WebDAV storage."),
+    h("div", { class: "fxrows" }, ...rows), fx && fx.error ? h("p", { class: "note bad" }, fx.error) : null,
+    tog("Carry my keys (Miniflux, WebDAV, Raindrop)", "keys"), tog("Carry settings, folder order and look", "settings"),
+    h("div", { class: "dfoot left" }, h("button", { class: "btn", "data-act": "fx-push", onclick: () => fxAct("push", true) }, "Send this machine's setup now"),
+      h("button", { class: "btn", "data-act": "fx-pull", onclick: async () => { if (await askConfirm({ title: "Replace this machine's setup?", body: "This takes the copy held in Firefox Sync for the parts you carry, even where this machine has newer changes.", confirmLabel: "Fetch and replace" })) fxAct("pull", true); } }, "Fetch from Firefox Sync now")),
+    h("p", { class: "note" }, "Firefox Sync must be signed in on both machines, with Add-ons ticked under Settings, Sync, Change. Firefox delivers new data in the background, usually within a few minutes. Machine names are never carried, so each machine keeps its own."));
+}
+const download = (name, text) => { try { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "application/json" })); a.download = name; document.body.append(a); a.click(); a.remove(); return true; } catch { return false; } };
+function filePanel() {
+  const ex = S.exp || (S.exp = { keys: false, pass: "", history: false }); const im = S.imp || (S.imp = { text: "", name: "", needPass: false, pass: "" });
+  const exportNow = async () => {
+    const r = await send({ type: "exportSettings", keys: ex.keys, passphrase: ex.pass, history: ex.history, ui: U });
+    if (!r.ok) return toast(r.sentence, { kind: "error" });
+    const saved = download(r.filename, r.text);
+    toast(saved ? `Saved ${r.filename}${r.keys ? ". The keys in it are sealed with your passphrase" : ". It holds no keys"}${r.events ? `, with ${r.events.toLocaleString()} history events` : ""}.` : "The file could not be saved from this page.", { kind: saved ? "success" : "error" });
+  };
+  const importNow = async () => {
+    if (!im.text) return toast("Choose a settings file first.", { kind: "warn" });
+    const r = await send({ type: "importSettings", text: im.text, passphrase: im.pass });
+    if (!r.ok) { if (r.code === "need-passphrase" || r.code === "bad-passphrase") { im.needPass = true; renderMain(); } return toast(r.sentence, { kind: "error" }); }
+    S.settings = r.settings; S.draft = null; adoptRemoteUi(r.settings); Object.assign(im, { text: "", name: "", needPass: false, pass: "" });
+    toast(`Imported ${r.applied.map(a => a === "history" ? `${r.events.toLocaleString()} history events` : PART_WORDS[a] || a).join(", ")}${r.from ? ` from ${r.from}` : ""}.`, { kind: "success", action: r.applied.includes("keys") ? { label: "Open Newsfeed", fn: () => go("feed") } : null });
+    render(); loadFx();
+  };
+  return h("div", { class: "panel", "data-file": "1" }, h("h2", {}, "Settings file"),
+    h("p", {}, "A single file with your settings, folder order and look, for moving a setup by hand or keeping a copy. Keys are never written in the clear."),
+    h("h3", {}, "Export"),
+    h("label", { class: "check" }, h("input", { type: "checkbox", checked: ex.keys, "data-exp": "keys", onchange: (e) => { ex.keys = e.target.checked; renderMain(); } }), "Include my keys, sealed with a passphrase"),
+    ex.keys ? h("label", { class: "field" }, "Passphrase (you will need it to import the keys)", h("input", { type: "password", autocomplete: "new-password", value: ex.pass, "data-exp": "pass", oninput: (e) => { ex.pass = e.target.value; } })) : null,
+    h("label", { class: "check" }, h("input", { type: "checkbox", checked: ex.history, "data-exp": "history", onchange: (e) => { ex.history = e.target.checked; } }), "Include my reading history and training (can be large)"),
+    h("div", { class: "dfoot left" }, h("button", { class: "btn primary", "data-act": "export", onclick: exportNow }, "Export settings file")),
+    h("h3", {}, "Import"),
+    h("label", { class: "field" }, "Settings file", h("input", { type: "file", accept: ".json,application/json", "data-act": "import-file", onchange: async (e) => { const f = e.target.files && e.target.files[0]; if (!f) return; im.name = f.name; im.text = await f.text(); im.needPass = /"keys":\s*\{/.test(im.text); im.pass = ""; renderMain(); } })),
+    im.text ? h("p", { class: "note" }, `${im.name} is ready to import.`) : null,
+    im.needPass ? h("label", { class: "field" }, "Passphrase for the keys in this file", h("input", { type: "password", autocomplete: "off", value: im.pass, "data-imp": "pass", oninput: (e) => { im.pass = e.target.value; } })) : null,
+    h("div", { class: "dfoot left" }, h("button", { class: "btn primary", "data-act": "import", disabled: im.text ? null : true, onclick: importNow }, "Import")),
+    h("p", { class: "note" }, "Importing replaces the matching settings on this machine and sends them on through Firefox Sync. It never changes this machine's name."));
+}
+function moveMain() { return [fxCard(), filePanel()]; }
 
 // ---------- add a feed ----------
 // Miniflux's own server looks at the page and lists its feeds; this extension never contacts the site itself.

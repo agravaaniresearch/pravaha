@@ -62,10 +62,12 @@ export function computeStatus(i) {
     else lights.push({ id: "feeds", label: "Feeds", state: "green", sentence: `All ${i.feeds.total} feeds fetching normally.` });
   }
 
-  const syncLights = lights.filter(l => ["miniflux", "webdav", "log", "machines"].includes(l.id));
-  const overall = worst(syncLights.map(l => l.state));
+  // Green means something is connected and healthy. With nothing set up the answer is "off", never "in sync".
+  const syncLights = lights.filter(l => ["miniflux", "webdav", "log", "machines"].includes(l.id) && l.state !== "off");
+  const overall = !i.miniflux.configured ? "off" : worst(syncLights.map(l => l.state));
+  const scope = !i.miniflux.configured ? "none" : i.webdav.configured ? "full" : "miniflux";
   return {
-    overall, lights,
+    overall, scope, lights,
     left: { events: i.pendingEvents, ops: i.pendingOps, machines }
   };
 }

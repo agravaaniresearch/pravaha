@@ -7,3 +7,4 @@ extension/.amo-upload-uuid
 
 # Apple fonts are built locally by tools/apple-fonts.py and must never be committed
 extension/ui/fonts/apple/
+__pycache__/

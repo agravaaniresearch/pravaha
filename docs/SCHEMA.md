@@ -76,7 +76,7 @@ An array of changes waiting for Miniflux, oldest first. `{op:"status", ids:[...]
 
 ### `settings` additions in 0.3.0
 
-`treeOrder`: `{ "<parent folder id or root>": ["<child id>", ...] }`. The saved order of folders and feeds within each parent. Anything not listed follows alphabetically after the listed ones, and folders always come before feeds. It is part of `settings`, so it travels with the other settings if the user turns on credential sync only in that the settings are saved together; it is not written to WebDAV.
+`treeOrder`: `{ "<parent folder id or root>": ["<child id>", ...] }`. The saved order of folders and feeds within each parent. Anything not listed follows alphabetically after the listed ones, and folders always come before feeds. It is part of `settings`. From 0.4.0 it travels through Firefox Sync as the `order` part; it is not written to WebDAV.
 
 `searchKeepDays`: days to keep articles in the search index after they leave the reading cache. Default 400.
 
@@ -86,11 +86,41 @@ An array of changes waiting for Miniflux, oldest first. `{op:"status", ids:[...]
 
 ### Interface preferences
 
-Interface preferences (theme, palette, density, thumbnails, read on scroll, reading font, interface font, confirm mark read, reading size, line gap, width, Bionic reading and its strength) and collapsed feeds live in the reader page's `localStorage` under `pravaha.ui` and `pravaha.collapsed`. They stay on the machine and are not synced.
+Interface preferences (theme, palette, density, thumbnails, read on scroll, reading font, interface font, confirm mark read, reading size, line gap, width, Bionic reading and its strength) and collapsed feeds live in the reader page's `localStorage` under `pravaha.ui` and `pravaha.collapsed`. The reader keeps them in `localStorage` as a fast cache and, from 0.4.0, mirrors them into `settings.ui` (with a timestamp, `pravaha.ui.at`) through the `saveUi` message, debounced by 500 ms. A newer `settings.ui` that arrives from Firefox Sync or a settings file is adopted at the next start or on a `profile` message. Collapsed feeds stay on the machine.
 
 ### Fonts
 
 Bundled fonts: OFL, except Ubuntu (Ubuntu Font Licence 1.0); licences are in `extension/ui/fonts/`. Reading ids: `newsreader`, `literata`, `newyork`, `sourceserif`, `lora`, `crimson`, `merriweather`, `system`, `atkinson`, `sfpro`, `ubuntu`. Interface ids: `plex`, `sourcesans`, `atkinson`, `sfpro`, `ubuntu`, `system`. `newyork` and `sfpro` are Apple fonts, present only in a locally built extension (`extension/ui/fonts/apple/`, git-ignored); the reader probes for them and disables the card when absent. An unknown or removed id falls back to the default. The `FONT_INFO` table in `ui/prefs.js` holds each font's group and one-line note. Only the Latin subset of each is bundled.
+
+### `settings` additions in 0.4.0
+
+- `installId`: random 12 characters made on first start. The state file `state/<machine>.json` carries it as `installId`. If a sync finds the state file of the same machine name with a different `installId`, nothing is written and the sync stops with `code: "name-clash"`; `status().nameClash` is `{device, since}`.
+- `device` default is `browser-xxxxx` (random). The old default `this-machine` is renamed only while nothing has been written under it.
+- `sync`: `{keys: bool, settings: bool}`, both default true, local to the machine, never carried.
+- `syncMeta`: `{ "<part>": {at, hash} }`, what was last sent or taken for each part. Local only.
+- `ui`: the look-and-feel preferences, as above.
+- `syncCreds` is gone. The old Firefox Sync item `pravahaCreds` is read once if the machine has no Miniflux key.
+
+### Firefox Sync items (`browser.storage.sync`)
+
+Four items, each `{ v: 1, at: <ms>, by: <machine name>, data }`. The newest `at` wins per part. Firefox's documented limits are about 100 KB in total, 8,192 bytes per item and 512 items; a part whose serialised item is over 7,600 bytes is kept on the machine and reported in plain words, and the other parts still go. These limits come from documentation and were not re-checked in 0.4.0.
+
+| Item | Contents |
+|---|---|
+| `pv:keys` | Miniflux address and key, WebDAV address, user, app password and folder, Raindrop token. Sent only by a machine that holds at least one key. |
+| `pv:settings` | `weights`, `pollMinutes`, `novelty`, `palette`, `theme`, `retentionDays`, `autoTag`, `autoDigest`, `saveToRaindrop`, `searchKeepDays`. Never `device`, `installId`, `sync` or `syncMeta`. |
+| `pv:order` | `treeOrder` |
+| `pv:ui` | `settings.ui` |
+
+Pulls happen at start-up and on every `storage.onChanged` for a `pv:` key. A machine that has never held a key never writes. Taking keys starts a sync at once.
+
+### Settings file
+
+`{ format: "pravaha-settings", version: 1, exportedAt, from, settings, order, ui, keys, events? }`. `keys` is `null` or `{kdf: "PBKDF2-SHA256", iter: 250000, cipher: "AES-256-GCM", salt, iv, data}` (base64), sealing the same object as `pv:keys`. `events` is the event log, present only when the user ticked history; importing merges it by set union, so importing twice adds nothing. Files with a larger `version` are refused. The machine name is never read from the file.
+
+### Messages added in 0.4.0
+
+`profileSync` (summary of the four parts), `profilePull {force}`, `profilePush`, `exportSettings {keys, passphrase, history, ui}`, `importSettings {text, passphrase}`, `saveUi {ui}`. `status()` gains `scope` (`none`, `miniflux`, `full`), `imported` (`{at, events, devices}` after history arrives) and `nameClash`. `overall` is `off` when Miniflux is not configured.
 
 ## Miniflux calls
 

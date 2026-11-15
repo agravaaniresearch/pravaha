@@ -35,7 +35,17 @@ Open Settings in the reader.
 4. **Raindrop.** Paste the token if you want tag suggestions and one-way saving.
 5. **Custom servers.** If your Miniflux or WebDAV address is not the default, Firefox asks for permission to reach it when you press Save. Accept.
 
-The second machine uses the same Miniflux, WebDAV and folder settings with its own name. Turning on "Carry my keys between machines with Firefox Sync" copies the keys through your encrypted Firefox account, so you only type them once.
+## 4b. Setting up a second machine (0.4.0)
+
+A machine with no keys shows "Set up this machine" at the top of Settings with three routes. Everything arrives in the same order: keys, then articles from Miniflux, then reading history from the WebDAV storage (the toast and the Sync page show how many events were read).
+
+1. **Firefox Sync.** On the first machine open Settings, Move setup and press Send (it also sends by itself). On the new machine sign in to Firefox Sync with Add-ons ticked, install Pravaha, and wait. Firefox delivers in the background, usually within minutes; Check Firefox Sync now looks at once. Keys, settings, folder order and look arrive; the machine name does not.
+2. **Settings file.** Settings, Move setup, Export. Tick keys and choose a passphrase if you want the keys in the file; tick history to carry it in the file too. On the new machine choose Import and enter the passphrase.
+3. **Type the keys** as in step 4.
+
+Give each machine its own name. A new install gets a name like `browser-k3x9a`; rename it in Settings, This machine, before the first sync if you prefer. If two installs share a name, the second stops with a plain message and writes nothing.
+
+If you update a machine that still has the old default name `this-machine` and has already written history, keep that name on that machine and rename only the new ones.
 
 ## 5. Obsidian and Grok
 
@@ -63,3 +73,8 @@ Apple's fonts are not in the repository. To use them yourself: `pip install font
 - The WebDAV folder holds the full event history. Back it up like any other folder.
 - To start the ranking over, delete the `events` folder in WebDAV and clear the extension's storage. Miniflux is untouched.
 - If a machine is lost, install on a new one with a new name. It rebuilds everything from Miniflux, Raindrop and the event log.
+
+
+## 7. Testing in real Firefox
+
+`tools/firefox-e2e/` drives two or three real Firefox profiles with Selenium against a fake Miniflux and WebDAV. Needs Firefox (160 tested; Zen is built on it) and geckodriver under `/home/claude/ffx` (or set `FFX`), `pip install selenium`, and `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` (set by the script) so Marionette may open extension pages. Run `node tools/firefox-e2e/serve.mjs 8799 &` then `python3 tools/firefox-e2e/e2e.py`. Firefox Sync's cloud is not reachable there, so delivery is simulated by copying the `storage.sync` items between profiles.

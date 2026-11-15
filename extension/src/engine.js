@@ -18,9 +18,10 @@ export const DEFAULT_SETTINGS = {
   device: "", miniflux: { url: "https://reader.miniflux.app", token: "" },
   webdav: { url: "https://myfiles.fastmail.com", user: "", pass: "", root: "pravaha" },
   raindrop: { token: "" }, weights: { ...DEFAULT_WEIGHTS }, pollMinutes: 2, novelty: true,
-  palette: "ember", theme: "light", syncCreds: false, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: true, treeOrder: {}, searchKeepDays: 400
+  palette: "ember", theme: "light", sync: { keys: true, settings: true }, syncMeta: {}, ui: null, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: true, treeOrder: {}, searchKeepDays: 400
 };
 const DAY = 86400000;
+const randomId = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => "abcdefghjkmnpqrstuvwxyz23456789"[b % 31]).join("");
 const UNREAD_CAP = 3000;
 
 const mediaKind = (encs) => { const m = (encs || []).map(x => String(x.mime_type || "")).find(t => /^(audio|video)\//.test(t)); return m ? m.split("/")[0] : null; };
@@ -31,11 +32,12 @@ const INDEX_CAP = 20000;
 const VERIFY_ROUNDS = 3;
 const RECENT_MS = 10 * 60000;
 const RECENT_TRIES = 3;
+const QUIET_MS = 1500;
 
 export class Engine {
   constructor({ storage, now = () => Date.now(), fetchImpl, platform = {}, onChange = () => {} }) {
     this.storage = storage; this.now = now; this.fetchImpl = fetchImpl; this.platform = platform; this.onChange = onChange;
-    this.sessionFeeds = new Set(); this._settled = new Map(); this.activity = null; this.searchIndex = {}; this._vecs = new Map(); this._model = null; this._derived = null;
+    this.sessionFeeds = new Set(); this._settled = new Map(); this.activity = null; this._muted = false; this._mutedAt = 0; this._heldChange = false; this.searchIndex = {}; this._vecs = new Map(); this._model = null; this._derived = null;
   }
 
   // ---------- persistence ----------
@@ -47,7 +49,12 @@ export class Engine {
     this.settings.raindrop = { ...DEFAULT_SETTINGS.raindrop, ...(this.settings.raindrop || {}) };
     this.settings.weights = { ...DEFAULT_WEIGHTS, ...(this.settings.weights || {}) };
     if (!this.settings.treeOrder || typeof this.settings.treeOrder !== "object") this.settings.treeOrder = {};
-    if (!this.settings.device) this.settings.device = "this-machine";
+    this.settings.sync = { ...DEFAULT_SETTINGS.sync, ...(this.settings.sync || {}) }; this.settings.syncMeta = { ...(this.settings.syncMeta || {}) };
+    let fresh = false;
+    // The old default name was shared by every install, which would make two machines write one log. A machine that has written nothing yet is safe to rename.
+    const untouched = !(s.events && s.events.length) && !((s.syncState || {}).pushedSeq);
+    if (!this.settings.device || (this.settings.device === "this-machine" && untouched)) { this.settings.device = "browser-" + randomId(5); fresh = true; }
+    if (!this.settings.installId) { this.settings.installId = randomId(12); fresh = true; }
     this.cache = { items: {}, feeds: [], lastChangeTs: 0, lastDigestAt: 0, lastDigestTerms: [], ...(s.cache || {}) };
     this.pendingOps = (s.pendingOps || []).map(o => ({ ...o, inflight: false })); this.raindropCache = s.raindropCache || null; this.echoLocal = s.echoLocal || null;
     this.enrichment = s.enrichment || {}; this.net = s.net || { miniflux: {}, webdav: {}, raindrop: {} };
@@ -57,11 +64,13 @@ export class Engine {
     this.syncState = s.syncState || freshSyncState();
     this._wire();
     this._invalidate();
+    if (fresh) await this.persist(["settings"]);
   }
   _wire() {
     const w = this.settings.webdav;
     this.dav = w.url && w.user && w.pass ? new WebDav({ baseUrl: w.url, user: w.user, pass: w.pass, fetchImpl: this.fetchImpl }) : null;
-    this.syncer = this.dav ? new Syncer({ dav: this.dav, log: this.log, device: this.settings.device, root: w.root || "pravaha", now: this.now, state: this.syncState, localExtra: () => ({ echo: this.echoLocal }) }) : null;
+    this.syncer = this.dav ? new Syncer({ dav: this.dav, log: this.log, device: this.settings.device, installId: this.settings.installId, root: w.root || "pravaha", now: this.now, state: this.syncState, localExtra: () => ({ echo: this.echoLocal }) }) : null;
+    if (this.syncer) this.syncer.onProgress = (p) => { if (p.device) this._act("history", `Reading history from ${p.device}`, p.done, p.total); else this._actEnd("history"); };
     const m = this.settings.miniflux;
     this.mf = m.url && m.token ? new Miniflux({ baseUrl: m.url, token: m.token, fetchImpl: this.fetchImpl }) : null;
     this.rd = this.settings.raindrop.token ? new Raindrop({ token: this.settings.raindrop.token, fetchImpl: this.fetchImpl }) : null;
@@ -78,12 +87,13 @@ export class Engine {
     this.settings = { ...this.settings, ...patch,
       miniflux: { ...this.settings.miniflux, ...(patch.miniflux || {}) }, webdav: { ...this.settings.webdav, ...(patch.webdav || {}) },
       raindrop: { ...this.settings.raindrop, ...(patch.raindrop || {}) }, weights: normaliseWeights({ ...this.settings.weights, ...(patch.weights || {}) }),
-      treeOrder: patch.treeOrder !== undefined ? patch.treeOrder : this.settings.treeOrder };
+      treeOrder: patch.treeOrder !== undefined ? patch.treeOrder : this.settings.treeOrder,
+      sync: { ...this.settings.sync, ...(patch.sync || {}) }, syncMeta: { ...this.settings.syncMeta, ...(patch.syncMeta || {}) }, ui: patch.ui !== undefined ? patch.ui : this.settings.ui };
     if (this.settings.device !== prevDevice) {
       const events = this.log.list(); this.log = new EventLog(this.settings.device, new Clock(this.settings.device, this.now)); this.log.merge(events);
       this.syncState = freshSyncState();
     }
-    this._wire(); this._invalidate(); await this.persist(); this.onChange();
+    this._wire(); this._invalidate(); await this.persist(); this._notify();
   }
   _invalidate() { this._model = null; this._derived = null; this._vecs.clear(); }
 
@@ -148,8 +158,19 @@ export class Engine {
     if (!this._flushP) this._flushP = this._flush().finally(() => { this._flushP = null; });
     return this._flushP;
   }
-  _act(kind, label, done = 0, total = 0) { this.activity = { kind, label, done, total, at: this.now() }; this.onChange(); }
-  _actEnd(kind) { if (this.activity && (!kind || this.activity.kind === kind)) { this.activity = null; this.onChange(); } }
+  // Background polls are quiet: nothing is announced unless they take longer than QUIET_MS or something visible changed.
+  _notify() { if (this._muted) { this._heldChange = true; return; } this.onChange(); }
+  _unmuteIfSlow() { if (this._muted && this.now() - this._mutedAt > QUIET_MS) { this._muted = false; this._heldChange = false; this.onChange(); } }
+  _visibleActivity() { return this._muted ? null : this.activity; }
+  _act(kind, label, done = 0, total = 0) { this.activity = { kind, label, done, total, at: this.now() }; this._unmuteIfSlow(); this._notify(); }
+  _actEnd(kind) { if (this.activity && (!kind || this.activity.kind === kind)) { this.activity = null; this._unmuteIfSlow(); this._notify(); } }
+  // What a person could see change on screen. Times and "last sync" stamps are left out, so an idle poll compares equal.
+  signature() {
+    let u = 0, sv = 0; const items = Object.values(this.cache.items); for (const x of items) { if (x.status === "unread") u++; if (x.starred) sv++; }
+    const errs = {}; for (const k of Object.keys(this.net || {})) errs[k] = this.net[k] && this.net[k].error ? this.net[k].error.plain : null;
+    const others = {}; for (const k of Object.keys(this.others || {})) others[k] = this.others[k] && this.others[k].head;
+    return [items.length, u, sv, (this.cache.feeds || []).length, this._remaining(), JSON.stringify(errs), this.log.list().length, JSON.stringify(others), JSON.stringify(this.settings), this.syncState.pushedSeq, JSON.stringify((this.cache.feeds || []).map(f => f.health && f.health.state))].join("~");
+  }
   _remaining() { return this.pendingOps.reduce((n, o) => n + (o.ids ? o.ids.length : 1), 0); }
   // Status changes go to Miniflux in chunks, so one very large request cannot fail as a whole or be cut off.
   // Each chunk that succeeds is removed from the op, so a retry resends only what did not arrive.
@@ -256,18 +277,27 @@ export class Engine {
   }
 
   // ---------- sync ----------
-  async syncNow() {
-    await this.refresh();
-    await this.refreshIcons();
-    await this.refreshRaindrop();
-    await this.refreshEcho();
-    if (this.syncer) {
-      const r = await this.syncer.sync();
-      if (r.ok) { this._netOk("webdav"); this.others = r.others; this._invalidate(); await this._enrich(); await this._autoDigest(); }
-      else this._netErr("webdav", new PlainError(r.error.plain, r.error.code));
-      this.pendingHistory.push({ at: this.now(), pending: this.syncer.pending().length }); this.pendingHistory = this.pendingHistory.slice(-120);
+  async syncNow({ quiet = false } = {}) {
+    const before = quiet ? this.signature() : null;
+    if (quiet) { this._muted = true; this._mutedAt = this.now(); this._heldChange = false; }
+    try {
+      await this.refresh();
+      await this.refreshIcons();
+      await this.refreshRaindrop();
+      await this.refreshEcho();
+      if (this.syncer) {
+        const r = await this.syncer.sync();
+        if (r.ok && r.pulled > 0) this.imported = { at: this.now(), events: r.pulled, devices: r.devices };
+        if (r.ok) { this._netOk("webdav"); this.others = r.others; this._invalidate(); await this._enrich(); await this._autoDigest(); }
+        else this._netErr("webdav", new PlainError(r.error.plain, r.error.code));
+        this.nameClash = this.syncer.nameClash || null;
+        this.pendingHistory.push({ at: this.now(), pending: this.syncer.pending().length }); this.pendingHistory = this.pendingHistory.slice(-120);
+      }
+      await this.persist();
+    } finally {
+      const announce = !quiet || !this._muted || this.signature() !== before; this._muted = false; this._heldChange = false;
+      if (announce) this.onChange();
     }
-    await this.persist(); this.onChange();
   }
   async _enrich() {
     try {
@@ -282,7 +312,7 @@ export class Engine {
 
   status() {
     const feeds = this.cache.feeds || [];
-    return { activity: this.activity, pendingCount: this._remaining(), ...computeStatus({
+    return { activity: this._visibleActivity(), imported: this.imported || null, nameClash: this.nameClash || null, pendingCount: this._remaining(), ...computeStatus({
       now: this.now(), device: this.settings.device, myHead: this.log.headOf(this.settings.device), remoteHeads: this.syncState.remoteHeads, others: this.others,
       miniflux: { configured: !!this.mf, error: this.net.miniflux && this.net.miniflux.error, lastOkAt: this.net.miniflux && this.net.miniflux.lastOkAt },
       webdav: { configured: !!this.dav, error: this.net.webdav && this.net.webdav.error, lastOkAt: this.net.webdav && this.net.webdav.lastOkAt },
@@ -375,7 +405,7 @@ export class Engine {
     for (const id of ids) { const it = this.cache.items[id]; if (!it || it.status === "read") continue; it.status = "read"; flipped.push(id); if (explicit && ids.length === 1) this._evt(it, "read_no_open"); }
     const changed = flipped.length;
     if (!ids.length) return { count: 0, changed: 0, ids: [], verified: true, retried: 0, failed: 0, pending: this._remaining() };
-    this._queue({ op: "status", ids: [...ids], status: "read" }); await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
+    this._queue({ op: "status", ids: [...ids], status: "read" }); await this.persist(); this._notify(); await this.flushOps(); this._notify();
     const res = { count: ids.length, changed, ids: flipped, verified: false, retried: 0, failed: 0, pending: this._remaining() };
     if (verify === undefined ? ids.length >= 25 : verify) Object.assign(res, await this._verifyRead(ids));
     return res;
@@ -410,7 +440,7 @@ export class Engine {
   }
   async markUnread(ids) {
     for (const id of ids) { const it = this.cache.items[id]; if (it) it.status = "unread"; }
-    this._queue({ op: "status", ids: [...ids], status: "unread" }); await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
+    this._queue({ op: "status", ids: [...ids], status: "unread" }); await this.persist(); this._notify(); await this.flushOps(); this._notify();
     return { count: ids.length, pending: this._remaining() };
   }
   // The reader opened the article as an in-page card. A light positive signal, logged once per session.
@@ -419,7 +449,7 @@ export class Engine {
     if (!this.sessionCards.has(id)) { this.sessionCards.add(id); this._evt(it, "card"); }
     this.sessionFeeds.add(it.feedId);
     if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
-    await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
+    await this.persist(); this._notify(); await this.flushOps(); this._notify();
   }
   // ---------- local search ----------
   // The index is a compact record of every article seen: title, feed, tags, a short summary and about fourteen
@@ -470,7 +500,7 @@ export class Engine {
   // Bring an old article that only the index remembers back into the cache, so the card can show it.
   async restore(id) {
     if (this.cache.items[id]) return true; if (!this.mf) return false;
-    try { const e = await this.mf.entry(id); this.cache.items[id] = this._norm(e, undefined); await this.persist(["cache"]); this.onChange(); return true; }
+    try { const e = await this.mf.entry(id); this.cache.items[id] = this._norm(e, undefined); await this.persist(["cache"]); this._notify(); return true; }
     catch (err) { this._netErr("miniflux", err); return false; }
   }
 
@@ -556,12 +586,12 @@ export class Engine {
     const it = this.cache.items[id]; if (!it) return null;
     this._evt(it, "open"); this.sessionFeeds.add(it.feedId);
     if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
-    await this.persist(); this.onChange(); this.flushOps().then(() => this.onChange());
+    await this.persist(); this._notify(); this.flushOps().then(() => this._notify());
     return { url: it.url, feedId: it.feedId };
   }
   async recordDwell(entryId, feedId, ms) {
     if (ms < 1000) return; this.log.append("dwell", { entry: entryId, feed: feedId, payload: { ms: Math.round(ms) } });
-    this._derived = null; this._model = null; await this.persist(["events"]); this.onChange();
+    this._derived = null; this._model = null; await this.persist(["events"]); this._notify();
   }
   async toggleSave(id) {
     const it = this.cache.items[id]; if (!it) return;
@@ -570,16 +600,16 @@ export class Engine {
     let tags = [];
     if (it.starred && this.rd && this.settings.saveToRaindrop) {
       if (this.settings.autoTag) tags = this.suggestTagsFor(id).map(t => t.tag);
-      this.rd.save({ link: it.url, title: it.title, tags }).then(() => this._netOk("raindrop")).catch(e => { this._netErr("raindrop", e); this.onChange(); });
+      this.rd.save({ link: it.url, title: it.title, tags }).then(() => this._netOk("raindrop")).catch(e => { this._netErr("raindrop", e); this._notify(); });
     }
-    await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
+    await this.persist(); this._notify(); await this.flushOps(); this._notify();
     return { saved: it.starred, tags };
   }
   async dismiss(id) {
     const it = this.cache.items[id]; if (!it) return;
     this._evt(it, "dismiss");
     if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
-    await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
+    await this.persist(); this._notify(); await this.flushOps(); this._notify();
   }
   async undismissAll() {
     const d = this._derive();
@@ -589,9 +619,9 @@ export class Engine {
     const back = [...d.dismissed].filter(id => this.cache.items[id] && this.cache.items[id].status === "read");
     for (const id of back) this.cache.items[id].status = "unread";
     if (back.length) this._queue({ op: "status", ids: back, status: "unread" });
-    await this.persist(); this.onChange(); await this.flushOps(); this.onChange();
+    await this.persist(); this._notify(); await this.flushOps(); this._notify();
   }
-  async train(type, key, value) { this.log.append("train", { payload: { type, key: String(key).toLowerCase(), value } }); this._derived = null; this._model = null; await this.persist(["events"]); this.onChange(); }
+  async train(type, key, value) { this.log.append("train", { payload: { type, key: String(key).toLowerCase(), value } }); this._derived = null; this._model = null; await this.persist(["events"]); this._notify(); }
   trainingRules() { return this._derive().training; }
 
   // ---------- stats and digest ----------

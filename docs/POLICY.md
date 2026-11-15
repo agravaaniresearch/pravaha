@@ -7,7 +7,9 @@ This is a design review of a personal tool, not legal advice.
 - **No telemetry.** The manifest declares that the extension collects no data. Nothing is sent to the author or any analytics service.
 - **Where data goes.** Only to servers the user configures: their Miniflux, their Fastmail WebDAV and Raindrop (api.raindrop.io). Article text stays in Miniflux and the local cache.
 - **Browsing history.** History and bookmarks are read locally to build the echo profile. Only a term vector and domain counts leave the machine, and only to the user's own WebDAV folder. Page URLs and titles of visited pages are not uploaded.
-- **Credentials.** The Miniflux key, WebDAV app password and Raindrop token are stored in the extension's local storage, which Firefox keeps unencrypted in the profile folder. Anyone with access to the profile can read them. Use a Fastmail app password limited to Files, and a Miniflux key you can revoke. Syncing keys through Firefox Sync is optional and off by default.
+- **Credentials.** The Miniflux key, WebDAV app password and Raindrop token are stored in the extension's local storage, which Firefox keeps unencrypted in the profile folder. Anyone with access to the profile can read them. Use a Fastmail app password limited to Files, and a Miniflux key you can revoke. From 0.4.0 the keys, settings, folder order and look are carried through Firefox Sync by default (two switches on Move setup turn it off), because a second machine otherwise starts empty. Firefox encrypts extension storage in Sync end to end with the Firefox account, but anyone who controls that account, or any machine signed in to it, can read the keys. A machine with no keys never writes to Firefox Sync, so a fresh install cannot overwrite a good setup. Whether Add-ons data is included depends on the user's Firefox Sync choices on both machines.
+- **Settings file.** The exported file holds keys only if the user chooses a passphrase; they are sealed with PBKDF2-SHA256 (250,000 rounds) and AES-256-GCM. A weak passphrase weakens the seal. Without a passphrase the keys are left out. The file may include the reading history if ticked; it then holds exactly what the event log holds and nothing more. Importing never changes the machine's name.
+- **Machine-name safeguard.** Each install has a random id. If two installs use one machine name, the second is stopped before it writes, because two writers on one log could mix history.
 - **Outside scoring.** `enrich/outbox.json` holds titles, summaries and links of borderline articles and the top terms of the interest profile. If the user connects an outside assistant, those leave the user's storage. Turning this on is the user's decision, and the file contains no credentials.
 
 - **Thumbnails and images.** When thumbnails or article images are shown, the browser loads them from the publisher's site, which reveals the user's IP address to that site. Thumbnails can be turned off in Settings. Feed icons come from Miniflux, not from publishers.
@@ -53,6 +55,7 @@ This is a design review of a personal tool, not legal advice.
 
 ## Residual risks to accept knowingly
 
-- Unencrypted keys in the Firefox profile.
+- Unencrypted keys in the Firefox profile, and, with Firefox Sync carrying them, readable by whoever controls the Firefox account.
+- Firefox Sync's cloud delivery was simulated in testing, not observed.
 - Two machines may show slightly different scores until their inputs match.
 - Real-server behaviour is not yet verified (see README).
