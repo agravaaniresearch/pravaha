@@ -139,6 +139,7 @@ async function onProfile(applied) {
 async function loadFx() { try { S.fx = await send({ type: "profileSync" }); } catch { S.fx = null; } if (S.tab === "sync" || (S.tab === "settings" && (S.stab === "move" || (S.settings && !S.settings.miniflux.token)))) renderMain(); }
 function noteImport(st) {
   const im = st && st.imported; if (!im || S.importSeen === im.at) return; const first = S.importSeen === undefined; S.importSeen = im.at;
+  if (!im.fresh) return; // the routine trickle of changes between two active machines is not announced
   if (first && Date.now() - im.at > 20000) return; // an old import, from before this page opened
   toast(`Brought in ${im.events.toLocaleString()} reading-history change${im.events === 1 ? "" : "s"} from ${im.devices.join(", ") || "other machines"}.`, { kind: "success" });
 }

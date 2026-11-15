@@ -287,7 +287,12 @@ export class Engine {
       await this.refreshEcho();
       if (this.syncer) {
         const r = await this.syncer.sync();
-        if (r.ok && r.pulled > 0) this.imported = { at: this.now(), events: r.pulled, devices: r.devices };
+        if (r.ok && r.pulled > 0) {
+          // Only the first history from a machine is announced; the routine trickle between two active machines is not.
+          const seen = (await this.storage.get(["seenDevices"])).seenDevices || []; const fresh = (r.devices || []).filter(d => !seen.includes(d));
+          this.imported = { at: this.now(), events: r.pulled, devices: r.devices, fresh: fresh.length > 0 };
+          if (fresh.length) await this.storage.set({ seenDevices: [...seen, ...fresh] });
+        }
         if (r.ok) { this._netOk("webdav"); this.others = r.others; this._invalidate(); await this._enrich(); await this._autoDigest(); }
         else this._netErr("webdav", new PlainError(r.error.plain, r.error.code));
         this.nameClash = this.syncer.nameClash || null;

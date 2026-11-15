@@ -117,6 +117,8 @@ test("history import reports progress and a quiet poll stays silent when nothing
   const orig = b._act.bind(b); b._act = (k, l, d, t) => { if (k === "history") seen.push([d, t]); return orig(k, l, d, t); };
   await b.syncNow(); assert.ok(b.imported && b.imported.events > 0, "the arrival is recorded"); assert.ok(seen.length >= 1, "progress was reported");
   n = 0; await b.syncNow({ quiet: true }); assert.equal(n, 0, "an idle background poll announces nothing");
+  assert.equal(b.imported.fresh, true, "the first history from a machine is announced");
+  await a.e.train("tag", "navy", 2); await a.e.syncNow(); await b.syncNow({ quiet: true }); assert.equal(b.imported.fresh, false, "a later trickle from the same machine is not announced");
   w.mf.st.entries.push({ ...w.mf.st.entries[0], id: 77, title: "Brand new story", status: "unread" }); n = 0;
   await b.syncNow({ quiet: true }); assert.ok(n >= 1, "a visible change is announced");
 });
