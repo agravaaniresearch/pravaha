@@ -94,6 +94,15 @@ try:
     check("syncing after the import adds no duplicate history and stays healthy", stC["overall"] in ("green", "amber") and not stC.get("nameClash"), str(stC["overall"]))
     # the file route also works through the real file picker
     C.open(); time.sleep(1)
+    # ---- the page must never become wider than the window (a scrollbar that flashes) --------
+    A.d.set_window_size(2370, 1030)
+    for tab in ("Newsfeed", "Sync", "Stats", "Settings"):
+        A.open(); time.sleep(0.8)
+        if tab != "Newsfeed": A.js("[...document.querySelectorAll('.tab')].find(b => b.textContent.includes(arguments[0])).click();", tab); time.sleep(0.8)
+        widths = set()
+        for _ in range(20): widths.add(A.js("return document.documentElement.scrollWidth - document.documentElement.clientWidth;")); time.sleep(0.25)
+        check(f"no horizontal overflow on the {tab} tab while the progress bar animates", widths == {0}, str(sorted(widths)))
+    A.d.set_window_size(1360, 900)
     # ---- idle refresh behaviour ------------------------------------------------------
     B.send({"type": "saveSettings", "patch": {"pollMinutes": 1}}); time.sleep(2)
     B.js("window.__changed = 0; window.__pillTexts = []; browser.runtime.onMessage.addListener(m => { if (m && m.type === 'changed') window.__changed++; }); setInterval(() => { const p = document.querySelector('.pill'); if (p) window.__pillTexts.push(p.textContent); }, 250);")

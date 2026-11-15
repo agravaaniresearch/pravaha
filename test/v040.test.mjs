@@ -122,3 +122,11 @@ test("history import reports progress and a quiet poll stays silent when nothing
   w.mf.st.entries.push({ ...w.mf.st.entries[0], id: 77, title: "Brand new story", status: "unread" }); n = 0;
   await b.syncNow({ quiet: true }); assert.ok(n >= 1, "a visible change is announced");
 });
+
+import { readFileSync } from "node:fs";
+test("the progress bar cannot widen the page: it clips its own animation and animates only while showing", () => {
+  const css = readFileSync(new URL("../extension/ui/reader.css", import.meta.url), "utf8");
+  const rule = css.match(/\.progress \{[^}]*\}/)[0]; assert.match(rule, /overflow:\s*hidden/); assert.match(rule, /position:\s*fixed/);
+  assert.ok(!/\.progress\[data-mode="indeterminate"\] i \{[^}]*animation/.test(css), "a hidden bar must not keep animating");
+  assert.match(css, /\.progress\[data-on="true"\]\[data-mode="indeterminate"\] i \{[^}]*animation: slide/);
+});
