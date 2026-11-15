@@ -380,9 +380,10 @@ mark { background: color-mix(in srgb, var(--amber) 55%, transparent); color: inh
 /* Folder list: grab cursor, lift, drop line, right-click menu. Nothing here animates continuously. */
 .side { position: sticky; }
 .trow[data-grab="true"] .tbtn { cursor: grab; }
-body.dragging-folder, body.dragging-folder * { cursor: grabbing !important; user-select: none !important; }
-.trow.lift { opacity: .9; background: var(--raised); border-radius: 9px; box-shadow: 0 6px 18px color-mix(in srgb, var(--text) 16%, transparent); position: relative; z-index: 2; }
-.dropline { position: absolute; left: 8px; right: 8px; height: 3px; border-radius: 3px; background: var(--amber); pointer-events: none; z-index: 3; box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 22%, transparent); }
+/* A clear sheet over the page while a folder is dragged: one cursor everywhere, and nothing underneath reacts to the pointer. */
+.dragshield { position: fixed; inset: 0; z-index: 110; cursor: grabbing; }
+.trow.lift { opacity: .94; background: var(--raised); border-radius: 9px; box-shadow: 0 6px 18px color-mix(in srgb, var(--text) 16%, transparent); position: relative; z-index: 2; will-change: transform; pointer-events: none; }
+.dropline { position: absolute; top: 0; left: 8px; will-change: transform; right: 8px; height: 3px; border-radius: 3px; background: var(--amber); pointer-events: none; z-index: 3; box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 22%, transparent); }
 .dropline[data-still="true"] { opacity: .35; }
 .trow.dropped { animation: settle .7s var(--ease) 1; }
 @keyframes settle { from { background: color-mix(in srgb, var(--amber) 30%, transparent); } to { background: transparent; } }
@@ -479,3 +480,28 @@ body.dragging-folder, body.dragging-folder * { cursor: grabbing !important; user
 .cells + .panel .fxrows { display: none; }
 .page { max-width: 1240px; }
 html { scroll-padding-bottom: 90px; }
+
+/* ---- 0.6.0: feed management, server tile ---- */
+.btn.danger { background: var(--bad-bg); border-color: color-mix(in srgb, var(--bad) 40%, transparent); color: var(--bad); font-weight: 600; }
+.btn.danger:hover:not(:disabled) { filter: brightness(.96); }
+.btn:disabled { opacity: .5; cursor: default; }
+.feedbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 6px; }
+.feedbar .fq { flex: 1 1 220px; height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font-size: 13px; }
+.feedbar .fq:focus { border-color: var(--accent); outline: 0; }
+.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.flist { display: flex; flex-direction: column; margin-top: 4px; }
+.frow { display: flex; align-items: flex-start; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--line); content-visibility: auto; contain-intrinsic-size: auto 56px; }
+.frow .lamp { flex: none; margin-top: 6px; }
+.fmain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ftitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fcat { font-size: 12px; color: var(--muted); }
+.fnote { font-size: 12px; color: var(--warn); }
+.frow[data-state="red"] .fnote { color: var(--bad); }
+.frow[data-state="off"] .ftitle { color: var(--muted); }
+.tacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.frow .tacts { margin: 0; justify-content: flex-end; flex: none; max-width: 340px; }
+.flist > .btn { align-self: center; margin-top: 12px; }
+.checks { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+.checks li { display: flex; gap: 8px; align-items: flex-start; }
+.checks .lamp { flex: none; margin-top: 4px; }
+@media (max-width: 760px) { .frow { flex-wrap: wrap; } .frow .tacts { max-width: none; justify-content: flex-start; flex-basis: 100%; } }

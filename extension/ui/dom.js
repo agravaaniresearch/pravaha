@@ -22,10 +22,17 @@ const PATHS = {
   layers: "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5",
   clock: "M12 7v5l3 2M12 3a9 9 0 100 18 9 9 0 000-18z", bookmark: "M6 3h12v18l-6-4-6 4z", help: "M9.5 9a2.5 2.5 0 115 0c0 1.7-2.5 2-2.5 4M12 17h.01M12 3a9 9 0 100 18 9 9 0 000-18z"
 };
+// An icon is built once per name, size and fill, then copied. Copying a finished element is much cheaper than setting ten attributes each time,
+// and a long list of articles draws hundreds of them.
+const ICONS = new Map();
 export function icon(name, size = 18, filled = false) {
-  const s = document.createElementNS(NS, "svg");
-  for (const [k, v] of Object.entries({ viewBox: "0 0 24 24", width: size, height: size, fill: filled ? "currentColor" : "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) s.setAttribute(k, v);
-  const p = document.createElementNS(NS, "path"); p.setAttribute("d", PATHS[name] || ""); s.appendChild(p); return s;
+  const key = name + "|" + size + "|" + (filled ? 1 : 0); let proto = ICONS.get(key);
+  if (!proto) {
+    proto = document.createElementNS(NS, "svg");
+    for (const [k, v] of Object.entries({ viewBox: "0 0 24 24", width: size, height: size, fill: filled ? "currentColor" : "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) proto.setAttribute(k, String(v));
+    const p = document.createElementNS(NS, "path"); p.setAttribute("d", PATHS[name] || ""); proto.appendChild(p); ICONS.set(key, proto);
+  }
+  return proto.cloneNode(true);
 }
 export function h(tag, props = {}, ...kids) {
   const e = document.createElement(tag);

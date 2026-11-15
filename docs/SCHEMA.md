@@ -127,3 +127,57 @@ Pulls happen at start-up and on every `storage.onChanged` for a `pv:` key. A mac
 ## Miniflux calls
 
 Read: `/me`, `/feeds`, `/categories`, `/entries` (with `status`, `starred`, `changed_after` and, for older articles, `search`), `/entries/{id}`, `/feeds/{id}/icon`. Write: `PUT /entries` (status, in chunks of 150), `PUT /entries/{id}/bookmark`, `GET /entries/{id}/fetch-content`. New in 0.3.0: `POST /discover` and `POST /feeds` and `POST /categories`, only when the user presses Find feeds, Subscribe or a new folder name.
+
+## 0.6.0: server contract, light refresh, feed management
+
+This section is written before the code. Where the Miniflux documentation (miniflux.app/docs/api.html, read in November 2026) is the only evidence for a behaviour, it says so. None of it has been run against a live Miniflux server; the capability record below is how Pravaha finds out on the first refresh and tells the reader.
+
+### Local key `server` (never synced; each machine learns its own)
+
+```
+server: {
+  version:   string | null,          // from GET /v1/version, e.g. "2.3.5"; null when the call failed or is unsupported
+  checkedAt: ms | null,              // last time /version was tried; retried after 6 hours, or at once after a contract failure
+  caps: {                            // what this server is known to support; every value is true, false or null (not yet known)
+    version: bool|null,              // GET /version exists (documented since 2.0.49)
+    entryIds: bool|null,             // GET /entries/ids (documented since 2.3.2): filters status, starred, offset, limit <= 10000 only
+    afterEntryId: bool|null,         // GET /entries?after_entry_id (documented since 2.0.9)
+    categoryRefresh: bool|null,      // PUT /categories/{id}/refresh (documented since 2.0.42; runs in the background)
+    feedRefresh: bool|null           // PUT /feeds/{id}/refresh (synchronous, 204)
+  },
+  history: [ { v: string, at: ms } ],        // at most 5, newest last; a new entry is added whenever `version` changes
+  changed: { from: string, to: string, at: ms } | null,   // set when the version differs from the last one seen; cleared by "Got it"
+  contract: { ok: bool, at: ms, problems: [ { where, field, plain, count } ], skipped: int }   // at most 8 problems
+}
+```
+
+Capability rules. A cap is `true` only after a call of that kind has succeeded with a well-shaped answer, and `false` only after the server answered 404 or 405, or a well-formed answer without the expected field. A network error or a 5xx never changes a cap. The version string is used only to explain a missing cap to the reader ("Miniflux 2.1.4 is older than 2.3.2, which added the list of entry numbers"); it never switches a feature on.
+
+Contract rules. Each response that Pravaha uses is checked against a minimal shape before it touches the cache. Feeds need `id` (number), `title` (string) and `category.title` (string). Entries need `id`, `feed_id`, `status` (`read`, `unread` or `removed`) and `published_at` (parsable date); `title` and `content` may be empty. The entry number list needs `entry_ids` as an array of integers and `total` as a number. An item that fails is skipped, not guessed; the first eight distinct (where, field) pairs are kept in `contract.problems` with a count, and `contract.skipped` is the number of items dropped in the latest refresh. A refresh that skipped anything leaves the Miniflux lamp red, with the field named. It clears itself after a refresh with no failure.
+
+Lamp. One new light, `server`, joins the status report: `off` when Miniflux is not set up; `red` when `contract.ok` is false; `amber` when `changed` is set and not yet acknowledged, or when the server is older than a feature Pravaha would otherwise use; `green` otherwise. It counts toward `overall`, so the top-bar pill, the toolbar badge and the Sync dashboard all show it. The toolbar badge is a single character on the extension button (`!` amber or red) and is removed when `overall` is green or off.
+
+### Light refresh (replaces the full download when `caps.entryIds` is not `false`)
+
+The old refresh downloaded every unread article body (up to 3,000) each time. The light refresh downloads ids and only the bodies Pravaha does not have.
+
+1. `GET /feeds` as before.
+2. `GET /entries/ids?status=unread&limit=10000`. If `total` exceeds the length of `entry_ids`, the list is incomplete and the old full path runs instead; nothing is marked read from an incomplete list.
+3. New articles: `GET /entries?status=unread&after_entry_id=<highest id in cache>&order=id&direction=asc&limit=250`, paged until a short page. Ids in the list that are lower than the highest cached id and missing from the cache (an article marked unread again elsewhere) are fetched one by one with `GET /entries/{id}`, at most 40; more than 40 sends the refresh down the old full path.
+4. Reconciliation. A cached unread article that is absent from the id list and is not pending, not recently sent, and not in a refresh window that began after the call started, is set to `read`. This is the same rule as before, with ids in place of bodies, so it also catches articles Miniflux deleted.
+5. Stars: `GET /entries/ids?starred=true`; a cached article whose `starred` disagrees is corrected, and a starred id missing from the cache is fetched with `GET /entries/{id}`.
+6. Changes elsewhere: `changed_after` as before.
+
+The old full path remains, unchanged, as the fallback; `refresh` records `net.miniflux.mode` as `light` or `full` so the Sync page says which ran.
+
+### Messages and Miniflux calls added
+
+`serverState` (returns `server` plus the derived lamp), `serverAck` (clears `changed`), `serverCheck` (runs /version, the id list and a one-entry shape check without changing the cache, and returns plain sentences), `feedUpdate {id, title?, category?, disabled?}`, `feedDelete {id, confirm}`, `folderRename {id, to}`, `refreshScope {scope}`. Calls: `GET /version`, `GET /entries/ids`, `GET /entries?after_entry_id`, `PUT /feeds/{id}` (only the fields being changed), `DELETE /feeds/{id}`, `PUT /categories/{id}` (title), `PUT /feeds/{id}/refresh`, `PUT /categories/{id}/refresh`.
+
+Feed management rules. These calls change the server and are never queued: if Miniflux cannot be reached, the action fails with a sentence and nothing changes locally. A successful call updates `cache.feeds` at once and the next refresh confirms it. Moving a feed to a folder that does not exist creates the category first. Renaming a folder renames the category with that title and every category whose title begins with `title/`, one call at a time; if one fails, the ones already renamed stay renamed, the sentence names them, and the feeds are re-read. Deleting a feed requires the exact feed title typed back; the engine checks it as well as the screen, and removes the feed's articles from the cache and the search index. Deleting a folder is not offered, because the Miniflux documentation does not say what happens to its feeds. Disabling a feed (`disabled: true`) is the reversible alternative and is what the screen suggests first.
+
+Targeted refresh. `refreshScope` with `feed:<id>` calls `PUT /feeds/{id}/refresh`, then a light refresh. With `cat:<path>` it calls `PUT /categories/{id}/refresh` for the category and each sub-category (the call returns before the feeds finish), then schedules one light refresh after 6 seconds and another after 20. A 429 or a message about refreshing too often is shown as "Miniflux limits how often a feed can be refreshed".
+
+### Schema changes to existing keys
+
+`net.miniflux` gains `mode` (`light` | `full`), `calls` (requests made by the last refresh) and `bytes` (approximate size of the last refresh's responses). When the server's version number changes, `noteVersion` records `changed {from, to, at}` and sets every learned capability (`entryIds`, `afterEntryId`, `categoryRefresh`, `feedRefresh`) back to unknown, so each is learned again against the new server. `status()` gains `server`. No event types change, so the history log and Firefox Sync parts are untouched, and machines on 0.5.0 keep working with machines on 0.6.0.

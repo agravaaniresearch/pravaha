@@ -23,13 +23,39 @@ export function makeDav({ faults = () => null } = {}) {
 }
 
 export function makeMiniflux({ faults = () => null } = {}) {
-  const st = { feeds: [], entries: [], calls: [], puts: [], cats: [], discover: {}, flaky: null, delay: 0, stale: null, nextFeed: 100, nextCat: 50 };
+  const st = { feeds: [], entries: [], calls: [], puts: [], cats: [], discover: {}, flaky: null, delay: 0, stale: null, nextFeed: 100, nextCat: 50, version: "2.3.5", noVersion: false, noIds: false, noAfter: false, badIds: false, refreshed: [], refreshLimit: false, failRename: null, deleted: [], bytesOf: 0 };
+  const cats = () => { if (!st.cats.length) { const seen = new Map(); for (const f of st.feeds) if (!seen.has(f.category.title)) seen.set(f.category.title, seen.size + 1); st.cats = [...seen].map(([title, id]) => ({ id, title })); } return st.cats; };
   const handler = async (url, opts = {}) => {
     const f = faults(opts.method, url); if (f === "throw") throw new TypeError("network down"); if (typeof f === "number") return new Response("", { status: f });
     const u = new URL(url); const path = u.pathname.replace(/^\/v1/, ""); const m = opts.method || "GET"; st.calls.push(`${m} ${path}`);
     if (opts.headers["X-Auth-Token"] !== "good-key") return new Response("", { status: 401 });
     const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s });
     if (path === "/me") return json({ id: 1, username: "ap" });
+    if (path === "/version") return st.noVersion ? new Response("", { status: 404 }) : json({ version: st.version, commit: "abc", build_date: "2026-01-01", go_version: "go1.24", compiler: "gc", arch: "amd64", os: "linux" });
+    if (path === "/entries/ids") {
+      if (st.noIds) return new Response("", { status: 404 }); if (st.badIds) return json({ total: 1 });
+      let es = st.entries.slice(); const q = u.searchParams; if (q.get("status")) es = es.filter(e => e.status === q.get("status")); if (q.get("starred") === "true") es = es.filter(e => e.starred);
+      es.sort((a, b) => b.id - a.id); const off = Number(q.get("offset") || 0), lim = Math.min(10000, Number(q.get("limit") || 10000));
+      return json({ total: es.length, entry_ids: es.slice(off, off + lim).map(e => e.id) });
+    }
+    if (path === "/feeds/refresh" && m === "PUT") { st.refreshed.push("all"); if (st.refreshLimit) return new Response("", { status: 429 }); return new Response(null, { status: 204 }); }
+    let fm;
+    if ((fm = path.match(/^\/feeds\/(\d+)\/refresh$/)) && m === "PUT") { if (st.refreshLimit) return new Response("", { status: 429 }); if (!st.feeds.some(f => f.id === Number(fm[1]))) return new Response("", { status: 404 }); st.refreshed.push("feed:" + fm[1]); st.onRefresh && st.onRefresh(Number(fm[1])); return new Response(null, { status: 204 }); }
+    if ((fm = path.match(/^\/categories\/(\d+)\/refresh$/)) && m === "PUT") { if (st.refreshLimit) return new Response("", { status: 429 }); st.refreshed.push("cat:" + fm[1]); return new Response(null, { status: 204 }); }
+    if ((fm = path.match(/^\/categories\/(\d+)$/)) && m === "PUT") {
+      const b = JSON.parse(opts.body); const c = cats().find(x => x.id === Number(fm[1])); if (!c) return new Response("", { status: 404 });
+      if (st.failRename && b.title === st.failRename) return json({ error_message: "Unable to rename this category right now." }, 500);
+      if (cats().some(x => x.title === b.title && x.id !== c.id)) return json({ error_message: "This category already exists." }, 400);
+      for (const f of st.feeds) if (f.category.title === c.title) f.category = { ...f.category, title: b.title }; c.title = b.title; return json(c);
+    }
+    if ((fm = path.match(/^\/feeds\/(\d+)$/)) && m === "PUT") {
+      const f = st.feeds.find(x => x.id === Number(fm[1])); if (!f) return new Response("", { status: 404 }); const b = JSON.parse(opts.body);
+      if (b.title !== undefined) f.title = b.title; if (b.disabled !== undefined) f.disabled = !!b.disabled;
+      if (b.category_id !== undefined) { const c = cats().find(x => x.id === b.category_id); if (!c) return json({ error_message: "This category does not exist." }, 400); f.category = { id: c.id, title: c.title }; }
+      for (const e of st.entries) if (e.feed_id === f.id) e.feed = { id: f.id, title: f.title, category: f.category }; return json(f);
+    }
+    if ((fm = path.match(/^\/feeds\/(\d+)$/)) && m === "DELETE") { const i = st.feeds.findIndex(x => x.id === Number(fm[1])); if (i < 0) return new Response("", { status: 404 }); st.deleted.push(st.feeds[i].id); st.feeds.splice(i, 1); st.entries = st.entries.filter(e => e.feed_id !== Number(fm[1])); return new Response(null, { status: 204 }); }
+
     if (path === "/feeds" && m === "GET") return json(st.feeds);
     if (path === "/categories" && m === "GET") { if (!st.cats.length) { const seen = new Map(); for (const f of st.feeds) if (!seen.has(f.category.title)) seen.set(f.category.title, seen.size + 1); st.cats = [...seen].map(([title, id]) => ({ id, title })); } return json(st.cats); }
     if (path === "/categories" && m === "POST") { const b = JSON.parse(opts.body); if (!st.cats.length) { const seen = new Map(); for (const f of st.feeds) if (!seen.has(f.category.title)) seen.set(f.category.title, seen.size + 1); st.cats = [...seen].map(([title, id]) => ({ id, title })); } const c = { id: st.nextCat++, title: b.title }; st.cats.push(c); return json(c, 201); }
@@ -48,7 +74,8 @@ export function makeMiniflux({ faults = () => null } = {}) {
       if (q.get("search")) { const w = q.get("search").toLowerCase(); es = es.filter(e => `${e.title} ${e.content}`.toLowerCase().includes(w)); }
       if (st.stale && q.get("status") === "unread") { const snap = st.stale; st.stale = null; await snap.waitFor(); es = snap.entries; }
       if (q.get("changed_after")) es = es.filter(e => (e.changed_at || 0) > Number(q.get("changed_after")));
-      es.sort((a, b) => (Date.parse(b.published_at) - Date.parse(a.published_at)));
+      if (q.get("after_entry_id")) { if (st.noAfter) return new Response("", { status: 400 }); es = es.filter(e => e.id > Number(q.get("after_entry_id"))); }
+      if (q.get("order") === "id") es.sort((a, b) => (q.get("direction") === "desc" ? b.id - a.id : a.id - b.id)); else es.sort((a, b) => (Date.parse(b.published_at) - Date.parse(a.published_at)));
       const off = Number(q.get("offset") || 0), lim = Number(q.get("limit") || 100);
       return json({ total: es.length, entries: es.slice(off, off + lim) });
     }

@@ -80,6 +80,18 @@ Apple's fonts are not in the repository. To use them yourself: `pip install font
 
 Update every machine to 0.5.0 before using folder drag-and-drop on any of them: an older version counts the new `order` lines in the history as invalid (they are skipped and reported, nothing is lost). The toolbar icon, the popup and the "Subscribe with Pravaha" item need no setup. Feed detection is optional: Settings, This machine, "Detect feeds on pages". Firefox asks once for permission to run on all websites; saying no changes nothing else.
 
+## 6c. Updating to 0.6.0
+
+Nothing needs doing on the storage; no event type changed. Install the new file on each machine. Firefox asks for no new permission.
+
+1. Open Sync. The new **Miniflux server** tile shows the version. Press **Check server**: it reads only. Lines marked amber mean a newer Miniflux call is missing on your server, and Pravaha keeps using the older path for that part.
+2. A red tile or a red "!" on the toolbar button means Miniflux answered in a shape Pravaha does not recognise. Nothing wrong is saved; the sentence names the field. Send that sentence along when reporting it.
+3. After a Miniflux upgrade the tile turns amber and says the version changed. Look through your feeds, then press **Got it**.
+4. Feed changes (Settings, Feeds, or right-click) are written to Miniflux first. A folder rename is several requests; if one fails the message says which were done.
+5. Folder refresh and Refresh every feed ask Miniflux to fetch in the background, so new articles appear within a minute. Miniflux may refuse refreshes that come too often; Pravaha then says so.
+
+`e2e060.py` (0.6.0) drives the Feeds tab, the folder menu, the server tile and Check server, and a large library, in real Firefox. `perf_drag.py`, `perf_view.py` and `perf_calls.py` print the numbers in CHANGELOG.md. Start the fake servers first with `BIG=30x14 node tools/firefox-e2e/serve.mjs 8799` (restart them before every run).
+
 ## 7. Testing in real Firefox
 
 `tools/firefox-e2e/` drives two or three real Firefox profiles with Selenium against a fake Miniflux and WebDAV. Needs Firefox (160 tested; Zen is built on it) and geckodriver under `/home/claude/ffx` (or set `FFX`), `pip install selenium`, and `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` (set by the script) so Marionette may open extension pages. Run `node tools/firefox-e2e/serve.mjs 8799 &` then `python3 tools/firefox-e2e/e2e.py`. `tools/firefox-e2e/probe_flash.py` runs two active machines for a few minutes and counts toasts and redraws while idle. Firefox Sync's cloud is not reachable there, so delivery is simulated by copying the `storage.sync` items between profiles.

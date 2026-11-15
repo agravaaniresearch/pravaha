@@ -13,6 +13,7 @@ import { computeStatus } from "./status.js";
 import { buildOutbox, parseResults } from "./enrich.js";
 import { buildDigest, isoWeek } from "./digest.js";
 import { indexEntry, runSearch, parseQuery } from "./search.js";
+import { loadServer, collector, dueForCheck, noteVersion, setCap, notFound, badFeed, badEntry, badIds, badVersion, ackChange, serverLamp, MIN_VERSION } from "./server.js";
 
 export const DEFAULT_SETTINGS = {
   device: "", miniflux: { url: "https://reader.miniflux.app", token: "" },
@@ -23,6 +24,7 @@ export const DEFAULT_SETTINGS = {
 const DAY = 86400000;
 const randomId = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => "abcdefghjkmnpqrstuvwxyz23456789"[b % 31]).join("");
 const UNREAD_CAP = 3000;
+const LIGHT_FETCH_MAX = 40;
 
 const mediaKind = (encs) => { const m = (encs || []).map(x => String(x.mime_type || "")).find(t => /^(audio|video)\//.test(t)); return m ? m.split("/")[0] : null; };
 const ICON_RE = /^image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/i;
@@ -34,15 +36,16 @@ const RECENT_MS = 10 * 60000;
 const RECENT_TRIES = 3;
 const QUIET_MS = 1500;
 
+const roundBreakdown = (b) => { const o = {}; for (const [k, v] of Object.entries(b || {})) o[k] = typeof v === "number" ? Math.round(v * 1000) / 1000 : v; return o; };
 export class Engine {
   constructor({ storage, now = () => Date.now(), fetchImpl, platform = {}, onChange = () => {} }) {
     this.storage = storage; this.now = now; this.fetchImpl = fetchImpl; this.platform = platform; this.onChange = onChange;
-    this.sessionFeeds = new Set(); this._settled = new Map(); this.activity = null; this._muted = false; this._mutedAt = 0; this._heldChange = false; this.searchIndex = {}; this._vecs = new Map(); this._model = null; this._derived = null;
+    this.sessionFeeds = new Set(); this._settled = new Map(); this._timers = new Set(); this.activity = null; this._muted = false; this._mutedAt = 0; this._heldChange = false; this.searchIndex = {}; this._vecs = new Map(); this._model = null; this._derived = null;
   }
 
   // ---------- persistence ----------
   async load() {
-    const s = await this.storage.get(["settings", "cache", "events", "syncState", "pendingOps", "raindropCache", "echoLocal", "enrichment", "net", "others", "pendingHistory", "bodies", "icons", "searchIndex"]);
+    const s = await this.storage.get(["settings", "cache", "events", "syncState", "pendingOps", "raindropCache", "echoLocal", "enrichment", "net", "others", "pendingHistory", "bodies", "icons", "searchIndex", "server"]);
     this.settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
     this.settings.miniflux = { ...DEFAULT_SETTINGS.miniflux, ...(this.settings.miniflux || {}) };
     this.settings.webdav = { ...DEFAULT_SETTINGS.webdav, ...(this.settings.webdav || {}) };
@@ -61,7 +64,7 @@ export class Engine {
     this.searchIndex = s.searchIndex || {}; this.bodies = s.bodies || {}; this.icons = s.icons || {}; this.sessionCards = new Set(); this.others = s.others || {}; this.pendingHistory = s.pendingHistory || [];
     this.log = new EventLog(this.settings.device, new Clock(this.settings.device, this.now));
     this.log.merge(s.events || []);
-    this.syncState = s.syncState || freshSyncState();
+    this.syncState = s.syncState || freshSyncState(); this.server = loadServer(s.server);
     this._wire();
     this._invalidate();
     if (fresh) await this.persist(["settings"]);
@@ -76,7 +79,7 @@ export class Engine {
     this.rd = this.settings.raindrop.token ? new Raindrop({ token: this.settings.raindrop.token, fetchImpl: this.fetchImpl }) : null;
   }
   async persist(keys) {
-    const all = { settings: this.settings, cache: this.cache, events: this.log.list(), syncState: this.syncState, pendingOps: this.pendingOps, raindropCache: this.raindropCache, echoLocal: this.echoLocal, enrichment: this.enrichment, net: this.net, others: this.others, pendingHistory: this.pendingHistory };
+    const all = { settings: this.settings, cache: this.cache, events: this.log.list(), syncState: this.syncState, pendingOps: this.pendingOps, raindropCache: this.raindropCache, echoLocal: this.echoLocal, enrichment: this.enrichment, net: this.net, others: this.others, pendingHistory: this.pendingHistory, server: this.server };
     all.searchIndex = this.searchIndex;
     const out = {}; for (const k of keys || Object.keys(all).filter(x => x !== "searchIndex" || this._idxDirty)) out[k] = all[k];
     if (out.searchIndex) this._idxDirty = false;
@@ -210,41 +213,115 @@ export class Engine {
   _netOk(k) { this.net[k] = { error: null, lastOkAt: this.now() }; }
   _netErr(k, e) { this.net[k] = { ...(this.net[k] || {}), error: { plain: e instanceof PlainError ? e.plain : "Something unexpected went wrong; the details were not shown. Try again shortly.", code: e.code || "error" } }; }
 
+  // ---------- refresh: ids first, bodies only for what is new ----------
+  // Reads the version now and then, and whenever the last refresh found something Pravaha did not understand.
+  async _checkServer() {
+    if (!dueForCheck(this.server, this.now())) return;
+    try {
+      const v = await this.mf.version(); const bad = badVersion(v);
+      if (bad) { setCap(this.server, "version", false); this.server.checkedAt = this.now(); } else noteVersion(this.server, v.version, this.now());
+    } catch (e) { if (notFound(e)) { setCap(this.server, "version", false); this.server.checkedAt = this.now(); } else if (e && e.code === "auth") throw e; /* a failed version check never stops a refresh */ }
+  }
+  _applyFeeds(feeds, col) {
+    const ok = []; for (const f of feeds || []) { const bad = badFeed(f); if (bad) col.note("feeds", bad); else ok.push(f); }
+    this.cache.feeds = ok.map(f => ({ id: f.id, title: f.title, category: (f.category && f.category.title) || "Uncategorised", health: feedHealth(f, this.now()), siteUrl: f.site_url || "", feedUrl: f.feed_url || "", iconId: f.icon ? f.icon.icon_id : null, checkedAt: f.checked_at || null, disabled: !!f.disabled, errors: f.parsing_error_count || 0, errorText: f.parsing_error_message ? String(f.parsing_error_message).slice(0, 200) : "" }));
+  }
+  _takeEntry(e, col, prev) { const bad = badEntry(e); if (bad) { col.note("articles", bad); return false; } this.cache.items[e.id] = this._norm(e, prev); return true; }
+  // The full download: every unread article body, up to the cap. Used when the list of entry numbers is not available or cannot be trusted.
+  async _pullUnreadFull(pend, col) {
+    const un = await this.mf.allUnread(UNREAD_CAP);
+    const capped = un.entries.length >= UNREAD_CAP && un.total > un.entries.length;
+    const serverIds = new Set(); const recent = this.cache.recent; const resend = [];
+    for (const e of un.entries) {
+      if (badEntry(e)) { col.note("articles", badEntry(e)); continue; }
+      serverIds.add(e.id); if (pend.has(e.id)) continue; const cur = this.cache.items[e.id];
+      if (cur && cur.status === "read" && recent[e.id]) { recent[e.id].n++; resend.push(e.id); continue; }
+      this.cache.items[e.id] = this._norm(e, cur);
+    }
+    if (resend.length) this._queue({ op: "status", ids: resend, status: "read" });
+    if (!capped) for (const it of Object.values(this.cache.items)) if (it.status === "unread" && !serverIds.has(it.id) && !pend.has(it.id)) it.status = "read";
+  }
+  // The light pull. Returns false when it cannot be done safely, and the caller then runs the full download instead.
+  async _pullUnreadLight(pend, col) {
+    const have = this.cache.items; if (!Object.keys(have).length) return false;
+    let r;
+    try { r = await this.mf.entryIds({ status: "unread", limit: 10000 }); }
+    catch (e) { if (notFound(e)) { setCap(this.server, "entryIds", false); return false; } throw e; }
+    const bad = badIds(r); if (bad) { col.note("entry numbers", bad); setCap(this.server, "entryIds", false); return false; }
+    setCap(this.server, "entryIds", true);
+    const ids = r.entry_ids; if (r.total > ids.length) return false;
+    const idSet = new Set(ids); let maxId = 0; for (const k of Object.keys(have)) if (+k > maxId) maxId = +k;
+    const missing = ids.filter(id => !have[id] && !pend.has(id)); const newer = missing.filter(id => id > maxId); const older = missing.filter(id => id <= maxId);
+    if (older.length > LIGHT_FETCH_MAX || newer.length > UNREAD_CAP) return false;
+    if (newer.length) {
+      if (this.server.caps.afterEntryId === false) return false;
+      let cursor = maxId; const want = new Set(newer);
+      for (let guard = 0; guard < 20 && want.size; guard++) {
+        let page;
+        try { page = await this.mf.entries({ status: "unread", after_entry_id: cursor, order: "id", direction: "asc", limit: 250 }); }
+        catch (e) { if (notFound(e)) { setCap(this.server, "afterEntryId", false); return false; } throw e; }
+        const es = (page && page.entries) || []; setCap(this.server, "afterEntryId", true);
+        for (const e of es) { want.delete(e.id); if (!pend.has(e.id) && e.status === "unread") this._takeEntry(e, col, have[e.id]); cursor = Math.max(cursor, Number(e.id) || 0); }
+        if (es.length < 250) break;
+      }
+    }
+    for (const id of older) { try { const e = await this.mf.entry(id); if (e && e.status === "unread") this._takeEntry(e, col, have[id]); } catch (e) { if (e && e.code !== "rejected" && e.code !== "bad-reply") throw e; } }
+    // The same rules as the full download, with entry numbers in place of bodies: it was sent here a moment ago and is still unread there, so send it again.
+    const recent = this.cache.recent; const resend = [];
+    for (const id of ids) {
+      const cur = have[id]; if (!cur || pend.has(id)) continue;
+      if (cur.status === "read" && recent[id]) { recent[id].n++; resend.push(id); } else if (cur.status !== "unread") cur.status = "unread";
+    }
+    if (resend.length) this._queue({ op: "status", ids: resend, status: "read" });
+    for (const it of Object.values(have)) if (it.status === "unread" && !idSet.has(it.id) && !pend.has(it.id)) it.status = "read";
+    return true;
+  }
+  async _pullStars(pend, col) {
+    if (this.server.caps.entryIds !== false) {
+      try {
+        const r = await this.mf.entryIds({ starred: "true", limit: 10000 }); const bad = badIds(r);
+        if (!bad && r.total <= r.entry_ids.length) {
+          const star = new Set(r.entry_ids); const have = this.cache.items; const miss = r.entry_ids.filter(id => !have[id] && !pend.has(id));
+          if (miss.length <= LIGHT_FETCH_MAX) {
+            for (const id of miss) { try { const e = await this.mf.entry(id); this._takeEntry(e, col, undefined); } catch (e) { if (e && e.code !== "rejected" && e.code !== "bad-reply") throw e; } }
+            for (const it of Object.values(have)) { if (pend.has(it.id)) continue; if (star.has(it.id)) it.starred = true; else if (it.starred) it.starred = false; }
+            return;
+          }
+        } else if (bad) col.note("entry numbers", bad);
+      } catch (e) { if (!notFound(e)) throw e; setCap(this.server, "entryIds", false); }
+    }
+    const starred = await this.mf.entries({ starred: "true", limit: 250, order: "published_at", direction: "desc" });
+    const starIds = new Set();
+    for (const e of starred.entries || []) { if (badEntry(e)) { col.note("articles", badEntry(e)); continue; } starIds.add(e.id); if (pend.has(e.id)) continue; this.cache.items[e.id] = this._norm(e, this.cache.items[e.id]); }
+    if ((starred.entries || []).length < 250) for (const it of Object.values(this.cache.items)) if (it.starred && !starIds.has(it.id) && !pend.has(it.id)) it.starred = false;
+  }
+
   async refresh() {
     if (!this.mf) return;
+    const col = collector(); this.mf.stats.calls = 0; this.mf.stats.bytes = 0; let mode = "full";
     try {
       await this.flushOps();
       const t0 = this.now(); this._act("pull", "Reading from Miniflux");
-      const feeds = await this.mf.feeds();
-      this.cache.feeds = feeds.map(f => ({ id: f.id, title: f.title, category: (f.category && f.category.title) || "Uncategorised", health: feedHealth(f, this.now()), siteUrl: f.site_url || "", feedUrl: f.feed_url || "", iconId: f.icon ? f.icon.icon_id : null, checkedAt: f.checked_at || null }));
-      const un = await this.mf.allUnread(UNREAD_CAP);
-      const capped = un.entries.length >= UNREAD_CAP && un.total > un.entries.length;
+      await this._checkServer();
+      this._applyFeeds(await this.mf.feeds(), col);
       // Anything we sent while this fetch was running may be missing from the snapshot, so it counts as pending too.
       const pend = this._pendingIds(); for (const [id, t] of this._settled) if (t > t0) pend.add(id);
-      const serverIds = new Set();
       const recent = this.cache.recent || (this.cache.recent = {}); for (const id of Object.keys(recent)) if (this.now() - recent[id].t > RECENT_MS || recent[id].n >= RECENT_TRIES) delete recent[id];
-      const resend = [];
-      for (const e of un.entries) {
-        serverIds.add(e.id); if (pend.has(e.id)) continue; const cur = this.cache.items[e.id];
-        if (cur && cur.status === "read" && recent[e.id]) { recent[e.id].n++; resend.push(e.id); continue; }
-        this.cache.items[e.id] = this._norm(e, cur);
-      }
-      if (resend.length) this._queue({ op: "status", ids: resend, status: "read" });
-      if (!capped) for (const it of Object.values(this.cache.items)) if (it.status === "unread" && !serverIds.has(it.id) && !pend.has(it.id)) it.status = "read";
-      const starred = await this.mf.entries({ starred: "true", limit: 250, order: "published_at", direction: "desc" });
-      const starIds = new Set();
-      for (const e of starred.entries || []) { starIds.add(e.id); if (pend.has(e.id)) continue; this.cache.items[e.id] = this._norm(e, this.cache.items[e.id]); }
-      if ((starred.entries || []).length < 250) for (const it of Object.values(this.cache.items)) if (it.starred && !starIds.has(it.id) && !pend.has(it.id)) it.starred = false;
+      let light = false;
+      if (this.server.caps.entryIds !== false) light = await this._pullUnreadLight(pend, col);
+      if (light) mode = "light"; else await this._pullUnreadFull(pend, col);
+      await this._pullStars(pend, col);
       if (this.cache.lastChangeTs) {
-        for (const e of await this.mf.changedSince(this.cache.lastChangeTs)) { if (pend.has(e.id)) continue; if (this.cache.items[e.id] || e.status === "unread") this.cache.items[e.id] = this._norm(e, this.cache.items[e.id]); }
+        for (const e of await this.mf.changedSince(this.cache.lastChangeTs)) { if (pend.has(e.id)) continue; if (badEntry(e)) { col.note("articles", badEntry(e)); continue; } if (this.cache.items[e.id] || e.status === "unread") this.cache.items[e.id] = this._norm(e, this.cache.items[e.id]); }
       }
       this.cache.lastChangeTs = Math.floor(this.now() / 1000) - 5;
       this._retain(); this._reindex();
       if (this.pendingOps.length) await this.flushOps();
       this._netOk("miniflux"); this._vecs.clear();
+      this.net.miniflux = { ...this.net.miniflux, mode, calls: this.mf.stats.calls, bytes: this.mf.stats.bytes };
     } catch (e) { this._netErr("miniflux", e); }
-    this._actEnd("pull");
-    await this.persist(["cache", "net", "pendingOps", "searchIndex"]);
+    col.done(this.server, this.now()); this._actEnd("pull");
+    await this.persist(["cache", "net", "pendingOps", "searchIndex", "server"]);
   }
   _retain() {
     const cut = this.now() - this.settings.retentionDays * DAY; const d = this._derive();
@@ -317,12 +394,12 @@ export class Engine {
 
   status() {
     const feeds = this.cache.feeds || [];
-    return { activity: this._visibleActivity(), imported: this.imported || null, nameClash: this.nameClash || null, pendingCount: this._remaining(), ...computeStatus({
+    return { server: { version: this.server.version, changed: this.server.changed, caps: this.server.caps, contract: this.server.contract, mode: (this.net.miniflux && this.net.miniflux.mode) || null, calls: (this.net.miniflux && this.net.miniflux.calls) || 0, bytes: (this.net.miniflux && this.net.miniflux.bytes) || 0 }, activity: this._visibleActivity(), imported: this.imported || null, nameClash: this.nameClash || null, pendingCount: this._remaining(), ...computeStatus({
       now: this.now(), device: this.settings.device, myHead: this.log.headOf(this.settings.device), remoteHeads: this.syncState.remoteHeads, others: this.others,
       miniflux: { configured: !!this.mf, error: this.net.miniflux && this.net.miniflux.error, lastOkAt: this.net.miniflux && this.net.miniflux.lastOkAt },
       webdav: { configured: !!this.dav, error: this.net.webdav && this.net.webdav.error, lastOkAt: this.net.webdav && this.net.webdav.lastOkAt },
       raindrop: { configured: !!this.rd, error: this.net.raindrop && this.net.raindrop.error, lastOkAt: this.net.raindrop && this.net.raindrop.lastOkAt },
-      eventCounts: this.log.countsByDevice(), pendingOps: this.pendingOps.reduce((n, o) => n + (o.ids ? o.ids.length : 1), 0), pendingEvents: this.syncer ? this.syncer.pending().length : this.log.own().length, corruptLines: this.syncState.corruptLines,
+      serverLamp: serverLamp(this.server, !!this.mf, this.now()), eventCounts: this.log.countsByDevice(), pendingOps: this.pendingOps.reduce((n, o) => n + (o.ids ? o.ids.length : 1), 0), pendingEvents: this.syncer ? this.syncer.pending().length : this.log.own().length, corruptLines: this.syncState.corruptLines,
       feeds: { total: feeds.length, dead: feeds.filter(f => f.health.dead).length, trouble: feeds.filter(f => f.health.state === "amber").length }
     }) };
   }
@@ -355,8 +432,8 @@ export class Engine {
     for (const [k, v] of Object.entries(d.order || {})) if (v.wall > at) saved[k] = v.ids;
     const out = [];
     const walk = (key) => {
-      const list = kids.get(key) || []; const ord = Array.isArray(saved[key]) ? saved[key] : [];
-      const rank = (n) => { const i = ord.indexOf(n.id); return i < 0 ? 1e6 : i; };
+      const list = kids.get(key) || []; const ord = new Map((Array.isArray(saved[key]) ? saved[key] : []).map((id, i) => [id, i]));
+      const rank = (n) => (ord.has(n.id) ? ord.get(n.id) : 1e6);
       list.sort((a, b) => (a.type === b.type ? 0 : a.type === "folder" ? -1 : 1) || rank(a) - rank(b) || a.label.toLowerCase().localeCompare(b.label.toLowerCase()));
       list.forEach((n, i) => { n.first = i === 0 || list[i - 1].type !== n.type; n.last = i === list.length - 1 || list[i + 1].type !== n.type; out.push(n); if (n.type === "folder") walk(n.id); });
     };
@@ -381,9 +458,9 @@ export class Engine {
   _rowOf(it, ctx, dead, pend) {
     const s = this.scoreOne(it, ctx);
     return { id: it.id, feedId: it.feedId, feedTitle: it.feedTitle, title: it.title, summary: it.summary, url: it.url, publishedAt: it.publishedAt, read: it.status === "read", saved: it.starred,
-      score: s.score, why: whyRanked(s.breakdown), breakdown: s.breakdown, flag: s.flag, author: it.author, readingTime: it.readingTime, dead: dead.has(it.feedId), domain: it.domain, tags: it.tags || [], words: it.words || 0, thumb: it.thumb || null, media: it.media || null, comments: it.comments || null, newish: it.publishedAt > this.now() - 3 * 3600000, pending: !!(pend && pend.has(it.id)) };
+      score: s.score, why: whyRanked(s.breakdown), breakdown: roundBreakdown(s.breakdown), flag: s.flag, author: it.author, readingTime: it.readingTime, dead: dead.has(it.feedId), domain: it.domain, tags: it.tags || [], words: it.words || 0, thumb: it.thumb || null, media: it.media || null, comments: it.comments || null, newish: it.publishedAt > this.now() - 3 * 3600000, pending: !!(pend && pend.has(it.id)) };
   }
-  getView({ scope = "all", mode = "unread", ranked = false, q = "", keep = [] } = {}) {
+  getView({ scope = "all", mode = "unread", ranked = false, q = "", keep = [] } = {}, tree = null) {
     const d = this._derive(); const ctx = this._scoreCtx(); const keepSet = new Set(keep); const meta = this._feedMeta();
     const ql = q.trim().toLowerCase(); const dead = new Set(this.cache.feeds.filter(f => f.health.dead).map(f => f.id)); const pend = this._pendingIds();
     let items = Object.values(this.cache.items).filter(it => !d.dismissed.has(it.id) && this._inScope(scope, it, meta));
@@ -396,7 +473,7 @@ export class Engine {
       const r = rows.filter(x => !x.dead).sort((a, b) => b.score - a.score || b.publishedAt - a.publishedAt);
       groups = [{ key: "ranked", title: "Ranked for you", unread: r.filter(x => !x.read).length, rows: r }];
     } else {
-      const pos = new Map(); this.tree().forEach((n, i) => pos.set(n.id, i));
+      const pos = new Map(); (tree || this.tree()).forEach((n, i) => pos.set(n.id, i));
       const by = new Map(); for (const r of rows) { if (!by.has(r.feedId)) by.set(r.feedId, []); by.get(r.feedId).push(r); }
       groups = [...by.entries()].map(([id, rs]) => ({ key: "feed:" + id, feedId: Number(id), title: rs[0].feedTitle, unread: rs.filter(x => !x.read).length, rows: rs.sort((a, b) => b.publishedAt - a.publishedAt) }))
         .sort((a, b) => ((pos.has(a.key) ? pos.get(a.key) : 1e9) - (pos.has(b.key) ? pos.get(b.key) : 1e9)) || a.title.localeCompare(b.title));
@@ -552,6 +629,133 @@ export class Engine {
       return { ok: true, feedId: r.feed_id, title: f ? f.title : "the feed", sentence: `Subscribed to ${f ? f.title : "the feed"}.` };
     } catch (e) { this._netErr("miniflux", e); return { ok: false, sentence: e instanceof PlainError ? e.plain : "Subscribing failed for an unexpected reason." }; }
     finally { this._actEnd("subscribe"); }
+  }
+
+  // ---------- the server record, and managing feeds ----------
+  // These calls change the server, so they are never queued: if Miniflux cannot be reached the action fails with a sentence and nothing changes here.
+  async serverAck() { ackChange(this.server); await this.persist(["server"]); this._notify(); return this.status(); }
+  // A read-only self-test the reader can run on demand. It changes no article and no feed.
+  async serverCheck() {
+    if (!this.mf) return { ok: false, lines: [{ state: "off", text: "Miniflux is not set up yet." }], status: this.status() };
+    const lines = []; const col = collector(); const L = (state, text) => lines.push({ state, text }); this._act("check", "Checking Miniflux");
+    const probe = async (name, fn) => { try { return await fn(); } catch (e) { if (e && e.code === "auth") throw e; if (notFound(e)) return { __missing: true }; L("amber", `${name}: ${e instanceof PlainError ? e.plain : "the call failed for an unexpected reason."}`); return { __failed: true }; } };
+    try {
+      const v = await probe("Version", () => this.mf.version());
+      if (v && v.__missing) { setCap(this.server, "version", false); this.server.checkedAt = this.now(); L("amber", `Version: this server does not report one (older than ${MIN_VERSION.version}, or something in front of it hides the page).`); }
+      else if (v && !v.__failed) { const bad = badVersion(v); if (bad) { col.note("version", bad); L("red", "Version: the answer had no version number."); } else { noteVersion(this.server, v.version, this.now()); L("green", `Version: Miniflux ${v.version}.`); } }
+      const ids = await probe("Entry numbers", () => this.mf.entryIds({ status: "unread", limit: 1 }));
+      if (ids && ids.__missing) { setCap(this.server, "entryIds", false); L("amber", `Entry numbers: not offered (needs Miniflux ${MIN_VERSION.entryIds} or newer). Refreshes download every unread article instead.`); }
+      else if (ids && !ids.__failed) { const bad = badIds(ids); if (bad) { col.note("entry numbers", bad); setCap(this.server, "entryIds", false); L("red", `Entry numbers: the answer had no usable "${bad}".`); } else { setCap(this.server, "entryIds", true); L("green", `Entry numbers: working (${ids.total} unread). Refreshes download only what is new.`); } }
+      const aft = await probe("New articles", () => this.mf.entries({ status: "unread", after_entry_id: 0, order: "id", direction: "asc", limit: 1 }));
+      if (aft && aft.__missing) { setCap(this.server, "afterEntryId", false); L("amber", "New articles: this server ignores the position marker, so refreshes download every unread article."); }
+      else if (aft && !aft.__failed) { const e = (aft.entries || [])[0]; const bad = e ? badEntry(e) : null; if (bad) { col.note("articles", bad); L("red", `New articles: an article had no usable "${bad}".`); } else { setCap(this.server, "afterEntryId", true); L("green", "New articles: working."); } }
+      const fs = await probe("Feeds", () => this.mf.feeds());
+      if (Array.isArray(fs)) { const bad = fs.map(badFeed).find(Boolean); if (bad) { col.note("feeds", bad); L("red", `Feeds: a feed had no usable "${bad}".`); } else L("green", `Feeds: ${fs.length} read.`); }
+      L("off", "Refreshing one folder is not tried here, because it would make Miniflux fetch feeds. It is checked the first time you use it.");
+      col.done(this.server, this.now());
+    } catch (e) { L("red", e instanceof PlainError ? e.plain : "The check stopped for an unexpected reason."); }
+    finally { this._actEnd("check"); }
+    await this.persist(["server"]); this._notify();
+    return { ok: !lines.some(l => l.state === "red"), lines, status: this.status() };
+  }
+  feedsInfo() {
+    return this.cache.feeds.map(f => ({ id: f.id, title: f.title, category: f.category, state: f.health.state, sentence: f.health.sentence, disabled: !!f.disabled, errors: f.errors || 0, errorText: f.errorText || "", checkedAt: f.checkedAt, feedUrl: f.feedUrl, siteUrl: f.siteUrl }));
+  }
+  async _categoryId(title, create) {
+    const all = (await this.mf.categories()) || []; const c = all.find(x => x.title === title); if (c) return c.id;
+    if (!create) return null; const n = await this.mf.createCategory(title); return n.id;
+  }
+  async _rereadFeeds() { const col = collector(); this._applyFeeds(await this.mf.feeds(), col); col.done(this.server, this.now()); }
+  async feedUpdate(id, patch = {}) {
+    if (!this.mf) return { ok: false, sentence: "Miniflux is not set up yet." };
+    const f = this.cache.feeds.find(x => x.id === Number(id)); if (!f) return { ok: false, sentence: "That feed is no longer in the list. Refresh and try again." };
+    const body = {}; let cat = null; let title = f.title;
+    if (patch.title !== undefined) { const t = String(patch.title).replace(/\s+/g, " ").trim().slice(0, 200); if (!t) return { ok: false, sentence: "A feed needs a name." }; if (t !== f.title) { body.title = t; title = t; } }
+    if (patch.category !== undefined) { const c = splitCategory(patch.category).join("/").slice(0, 120); if (!c) return { ok: false, sentence: "A feed needs a folder." }; if (c !== f.category) cat = c; }
+    if (patch.disabled !== undefined && !!patch.disabled !== !!f.disabled) body.disabled = !!patch.disabled;
+    if (!Object.keys(body).length && !cat) return { ok: true, unchanged: true, sentence: "Nothing to change." };
+    this._act("manage", "Updating the feed");
+    try {
+      if (cat) body.category_id = await this._categoryId(cat, true);
+      await this.mf.updateFeed(f.id, body); this._netOk("miniflux"); await this._rereadFeeds();
+      for (const it of Object.values(this.cache.items)) if (it.feedId === f.id) { it.feedTitle = title; if (cat) it.category = cat; }
+      this._reindex(); await this.persist(["cache", "net", "server", "searchIndex"]); this._notify();
+      const say = body.disabled === true ? `Disabled “${title}”. Miniflux will stop fetching it until you enable it again.` : body.disabled === false ? `Enabled “${title}”.` : cat && body.title ? `Renamed to “${title}” and moved to ${cat}.` : cat ? `Moved “${title}” to ${cat}.` : `Renamed to “${title}”.`;
+      return { ok: true, sentence: say };
+    } catch (e) { this._netErr("miniflux", e); return { ok: false, sentence: e instanceof PlainError ? e.plain : "The change failed for an unexpected reason. Nothing was changed here." }; }
+    finally { this._actEnd("manage"); }
+  }
+  async feedDelete(id, confirm) {
+    if (!this.mf) return { ok: false, sentence: "Miniflux is not set up yet." };
+    const f = this.cache.feeds.find(x => x.id === Number(id)); if (!f) return { ok: false, sentence: "That feed is no longer in the list. Refresh and try again." };
+    if (String(confirm == null ? "" : confirm).trim() !== f.title.trim()) return { ok: false, sentence: "The name typed did not match the feed, so nothing was deleted." };
+    this._act("manage", "Deleting the feed");
+    try {
+      await this.mf.deleteFeed(f.id); this._netOk("miniflux");
+      const gone = new Set(); for (const it of Object.values(this.cache.items)) if (it.feedId === f.id) { gone.add(it.id); delete this.cache.items[it.id]; delete this.bodies[it.id]; delete this.searchIndex[it.id]; }
+      for (const op of this.pendingOps) if (op.op === "status") op.ids = op.ids.filter(i => !gone.has(i));
+      this.pendingOps = this.pendingOps.filter(op => op.op !== "status" || op.ids.length);
+      this.cache.feeds = this.cache.feeds.filter(x => x.id !== f.id); this._idxDirty = true; this._vecs.clear();
+      await this.persist(["cache", "net", "pendingOps", "searchIndex"]); await this.storage.set({ bodies: this.bodies }); this._notify();
+      return { ok: true, sentence: `Deleted “${f.title}” and its ${gone.size} article${gone.size === 1 ? "" : "s"} kept on this machine.` };
+    } catch (e) { this._netErr("miniflux", e); return { ok: false, sentence: e instanceof PlainError ? e.plain : "The delete failed for an unexpected reason. Nothing was deleted." }; }
+    finally { this._actEnd("manage"); }
+  }
+  // Renames a folder, and every folder inside it, one call at a time. Folders are Miniflux categories whose titles are paths such as "Defence/Shipbuilding".
+  async folderRename(path, to) {
+    if (!this.mf) return { ok: false, sentence: "Miniflux is not set up yet." };
+    const cur = splitCategory(path).join("/"); const leaf = String(to == null ? "" : to).replace(/\//g, " ").replace(/\s+/g, " ").trim().slice(0, 100);
+    if (!cur) return { ok: false, sentence: "That folder cannot be renamed." }; if (!leaf) return { ok: false, sentence: "A folder needs a name." };
+    const parts = splitCategory(cur); const next = [...parts.slice(0, -1), leaf].join("/"); if (next === cur) return { ok: true, unchanged: true, sentence: "Nothing to change." };
+    this._act("manage", "Renaming the folder"); const renamed = [];
+    try {
+      const all = (await this.mf.categories()) || []; const mine = all.filter(c => c.title === cur || c.title.startsWith(cur + "/"));
+      if (!mine.length) return { ok: false, sentence: "That folder was not found in Miniflux. Refresh and try again." };
+      const plan = mine.map(c => ({ id: c.id, from: c.title, to: next + c.title.slice(cur.length) })); const taken = new Set(all.map(c => c.title));
+      for (const p of plan) if (taken.has(p.to) && !plan.some(q => q.from === p.to)) return { ok: false, sentence: `A folder called “${p.to}” already exists, so nothing was renamed.` };
+      const topBefore = this.tree().filter(x => !x.parent).map(x => x.id);
+      for (const p of plan) { await this.mf.updateCategory(p.id, { title: p.to }); renamed.push(p); }
+      this._netOk("miniflux"); await this._rereadFeeds();
+      for (const it of Object.values(this.cache.items)) { const c = it.category; if (c === cur || (c && c.startsWith(cur + "/"))) it.category = next + c.slice(cur.length); }
+      const fromId = "cat:" + cur, toId = "cat:" + next;
+      if (parts.length === 1) await this.setOrder(topBefore.map(x => (x === fromId ? toId : x)));
+      await this.persist(["cache", "net", "server"]); this._notify();
+      return { ok: true, sentence: `Renamed “${cur}” to “${next}”${plan.length > 1 ? ` and the ${plan.length - 1} folder${plan.length > 2 ? "s" : ""} inside it` : ""}.`, map: { from: fromId, to: toId } };
+    } catch (e) {
+      this._netErr("miniflux", e); try { await this._rereadFeeds(); await this.persist(["cache", "net", "server"]); this._notify(); } catch { /* the first error is the one to report */ }
+      const part = renamed.length ? ` ${renamed.length} folder${renamed.length === 1 ? " was" : "s were"} already renamed (${renamed.map(r => `“${r.to}”`).join(", ")}); the rest were left as they were.` : " Nothing was renamed.";
+      return { ok: false, sentence: (e instanceof PlainError ? e.plain : "The rename failed for an unexpected reason.") + part };
+    } finally { this._actEnd("manage"); }
+  }
+  _later(ms) {
+    const t = setTimeout(async () => { this._timers.delete(t); try { await this.refresh(); this._notify(); } catch { /* shown on the Sync page */ } }, ms);
+    if (t && t.unref) t.unref(); this._timers.add(t);
+  }
+  // Ask Miniflux to fetch now, then bring in what arrived. A feed is fetched while Pravaha waits; a folder is fetched by Miniflux in the background, so Pravaha looks again a little later.
+  async refreshScope(scope) {
+    if (!this.mf) return { ok: false, sentence: "Miniflux is not set up yet." };
+    this._act("pull", "Asking Miniflux to refresh");
+    try {
+      const before = Object.keys(this.cache.items).length; const s = String(scope || "all");
+      if (s.startsWith("feed:")) {
+        const f = this.cache.feeds.find(x => x.id === Number(s.slice(5))); if (!f) return { ok: false, sentence: "That feed is no longer in the list." };
+        await this.mf.refreshFeed(f.id); setCap(this.server, "feedRefresh", true); await this.refresh(); this._notify();
+        const n = Object.keys(this.cache.items).length - before; return { ok: true, sentence: n > 0 ? `Fetched “${f.title}”: ${n} new article${n === 1 ? "" : "s"}.` : `Fetched “${f.title}”: nothing new.` };
+      }
+      if (s.startsWith("cat:")) {
+        const path = splitCategory(s.slice(4)).join("/"); const all = (await this.mf.categories()) || []; const mine = all.filter(c => c.title === path || c.title.startsWith(path + "/"));
+        if (!mine.length) return { ok: false, sentence: "That folder was not found in Miniflux." };
+        for (const c of mine) await this.mf.refreshCategory(c.id);
+        setCap(this.server, "categoryRefresh", true); const n = this.cache.feeds.filter(f => f.category === path || f.category.startsWith(path + "/")).length;
+        this._later(6000); this._later(20000); await this.persist(["server"]);
+        return { ok: true, sentence: `Asked Miniflux to refresh ${n} feed${n === 1 ? "" : "s"} in “${path}”. New articles appear here within a minute.` };
+      }
+      await this.mf.refreshAll(); this._later(6000); this._later(20000);
+      return { ok: true, sentence: "Asked Miniflux to refresh every feed. New articles appear here within a minute." };
+    } catch (e) {
+      if (notFound(e) && String(scope).startsWith("cat:")) setCap(this.server, "categoryRefresh", false);
+      this._netErr("miniflux", e); return { ok: false, sentence: e instanceof PlainError ? e.plain : "The refresh failed for an unexpected reason." };
+    } finally { this._actEnd("pull"); }
   }
 
   async _saveBodies() {

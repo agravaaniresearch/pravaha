@@ -20,6 +20,9 @@ export function computeStatus(i) {
   else if (i.pendingOps > 0) lights.push({ id: "miniflux", label: "Miniflux", state: "amber", sentence: `${i.pendingOps} read or save change${i.pendingOps === 1 ? "" : "s"} still waiting to reach Miniflux.` });
   else lights.push({ id: "miniflux", label: "Miniflux", state: "green", sentence: `Connected. Last fetch ${since(i.miniflux.lastOkAt)}.` });
 
+  // The Miniflux server itself: its version and whether its answers still look as expected
+  if (i.serverLamp) lights.push(i.serverLamp);
+
   // WebDAV
   if (!i.webdav.configured) lights.push({ id: "webdav", label: "WebDAV storage", state: "off", sentence: "Not set up yet. Without it, dwell time and training stay on this machine only." });
   else if (i.webdav.error) lights.push({ id: "webdav", label: "WebDAV storage", state: "red", sentence: `${i.webdav.error.plain} Last successful sync was ${since(i.webdav.lastOkAt)}.` });
@@ -71,7 +74,7 @@ export function computeStatus(i) {
   }
 
   // Green means something is connected and healthy. With nothing set up the answer is "off", never "in sync".
-  const syncLights = lights.filter(l => ["miniflux", "webdav", "log", "machines"].includes(l.id) && l.state !== "off");
+  const syncLights = lights.filter(l => ["miniflux", "server", "webdav", "log", "machines"].includes(l.id) && l.state !== "off");
   const overall = !i.miniflux.configured ? "off" : worst(syncLights.map(l => l.state));
   const scope = !i.miniflux.configured ? "none" : i.webdav.configured ? "full" : "miniflux";
   return {

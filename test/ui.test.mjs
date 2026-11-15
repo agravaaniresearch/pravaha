@@ -20,7 +20,7 @@ async function mount({ prep, noToken = false, prefs = null, fontProbe = null, ar
   const dom = new JSDOM('<!doctype html><html data-theme="auto"><body><div id="app"></div></body></html>', { url: "http://pravaha.test/ui/reader.html", pretendToBeVisual: true });
   const win = dom.window; win.HTMLElement.prototype.scrollIntoView = () => {}; win.matchMedia = () => ({ matches: false, addEventListener() {} }); if (fontProbe) win.document.fonts = { load: async (spec) => fontProbe(spec) };
   const ios = []; win.IntersectionObserver = class { constructor(cb) { this.cb = cb; this.els = new Set(); ios.push(this); } observe(e) { this.els.add(e); } disconnect() { this.els.clear(); } };
-  const defs = { window: win, document: win.document, localStorage: win.localStorage, navigator: win.navigator, location: win.location, history: win.history, getComputedStyle: win.getComputedStyle.bind(win), IntersectionObserver: win.IntersectionObserver, requestAnimationFrame: (f) => setTimeout(f, 0) };
+  const defs = { window: win, document: win.document, localStorage: win.localStorage, navigator: win.navigator, location: win.location, history: win.history, getComputedStyle: win.getComputedStyle.bind(win), IntersectionObserver: win.IntersectionObserver, requestAnimationFrame: (f) => setTimeout(f, 0), cancelAnimationFrame: (id) => clearTimeout(id) };
   for (const [k, v] of Object.entries(defs)) Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true });
   if (prefs) win.localStorage.setItem("pravaha.ui", JSON.stringify(prefs));
   const perms = { requested: [] };
@@ -376,4 +376,78 @@ test("the popup lists the page's feeds and subscribing opens the Add feed dialog
   const detect = { state: async () => ({ on: true }), get: async () => [{ url: "https://blog.example/feed.xml", title: "The Blog", type: "atom" }] };
   const t = await mount({ detect }); assert.deepEqual(await t.handlers.feedsFor({ tabId: 5 }), [{ url: "https://blog.example/feed.xml", title: "The Blog", type: "atom" }]);
   assert.deepEqual(await t.handlers.openSubscribe({ url: "javascript:alert(1)" }), { ok: false }); assert.deepEqual(await t.handlers.openSubscribe({ url: "https://blog.example/feed.xml" }), { ok: true }); assert.ok(t.opened.includes("subscribe:https://blog.example/feed.xml")); t.close();
+});
+
+// ---------- 0.6.0: feed management, server tile, lazy list ----------
+const openFeeds = async (t) => { t.$$(".tab").find(b => b.textContent.includes("Settings")).click(); await wait(40); t.$$(".stab").find(b => b.textContent === "Feeds").click(); await until(() => t.$$(".frow").length >= 3); };
+const setVal = (t, el, v) => { el.value = v; el.dispatchEvent(new t.win.Event("input", { bubbles: true })); };
+
+test("Feeds tab lists every feed with its health, filters by name, and shows only feeds in trouble on request", async () => {
+  const t = await mount(); await openFeeds(t);
+  assert.deepEqual(t.$$(".frow .ftitle").map(e => e.textContent).sort(), ["Broken Feed", "Kitchen Daily", "Naval Wire"]);
+  assert.match(t.$("[data-fsum]").textContent, /3 feeds/);
+  setVal(t, t.$("[data-field='feed-filter']"), "naval"); assert.deepEqual(t.$$(".frow .ftitle").map(e => e.textContent), ["Naval Wire"]);
+  setVal(t, t.$("[data-field='feed-filter']"), "defence"); assert.deepEqual(t.$$(".frow .ftitle").map(e => e.textContent), ["Naval Wire"], "the folder name is searched too");
+  setVal(t, t.$("[data-field='feed-filter']"), ""); const p = t.$("[data-field='feed-problems']"); p.checked = true; p.dispatchEvent(new t.win.Event("change", { bubbles: true }));
+  assert.deepEqual(t.$$(".frow .ftitle").map(e => e.textContent), ["Broken Feed"]); t.close();
+});
+test("renaming a feed asks for the name, saves it in Miniflux and updates the list and sidebar", async () => {
+  const t = await mount(); await openFeeds(t);
+  t.$$(".frow").find(r => r.textContent.includes("Kitchen Daily")).querySelector("[data-act='feed-rename']").click(); await wait(20);
+  const box = t.$("[data-field='text']"); assert.equal(box.value, "Kitchen Daily"); setVal(t, box, "Cooking Daily"); t.$("[data-act='confirm']").click();
+  await until(() => t.w.mf.st.feeds[1].title === "Cooking Daily"); await wait(150);
+  assert.ok(t.$$(".frow .ftitle").some(e => e.textContent === "Cooking Daily")); assert.ok(t.$$(".side .lbl").some(e => e.textContent === "Cooking Daily")); assert.equal(t.$(".dialogs .dialog"), null); t.close();
+});
+test("moving a feed offers the existing folders and New folder…, and the change reaches Miniflux", async () => {
+  const t = await mount(); await openFeeds(t);
+  t.$$(".frow").find(r => r.textContent.includes("Kitchen Daily")).querySelector("[data-act='feed-move']").click(); await wait(20);
+  const sel = t.$("[data-field='folder']"); assert.deepEqual([...sel.options].map(o => o.textContent), ["Defence", "Defence/Shipbuilding", "Food", "New folder…"]); assert.equal(sel.value, "Food");
+  sel.value = "__new__"; sel.dispatchEvent(new t.win.Event("change", { bubbles: true })); const nf = t.$("[data-field='newfolder']"); assert.equal(nf.hidden, false); assert.equal(t.$("[data-act='confirm']").disabled, true);
+  setVal(t, nf, "Home/Cooking"); assert.equal(t.$("[data-act='confirm']").disabled, false); t.$("[data-act='confirm']").click();
+  await until(() => t.w.mf.st.feeds[1].category.title === "Home/Cooking"); await wait(150); assert.ok(t.$$(".side .lbl").some(e => e.textContent === "Cooking")); t.close();
+});
+test("disable and enable switch a feed off and on in Miniflux and mark it in the list", async () => {
+  const t = await mount(); await openFeeds(t); const row = () => t.$$(".frow").find(r => r.textContent.includes("Kitchen Daily"));
+  row().querySelector("[data-act='feed-toggle']").click(); await until(() => t.w.mf.st.feeds[1].disabled === true); await wait(150);
+  assert.equal(row().dataset.state, "off"); assert.match(row().textContent, /Disabled/); assert.equal(row().querySelector("[data-act='feed-toggle']").textContent, "Enable");
+  row().querySelector("[data-act='feed-toggle']").click(); await until(() => t.w.mf.st.feeds[1].disabled === false); t.close();
+});
+test("deleting a feed needs the exact name typed, offers Disable instead, and removes it everywhere", async () => {
+  const t = await mount(); await openFeeds(t); const row = () => t.$$(".frow").find(r => r.textContent.includes("Broken Feed"));
+  row().querySelector("[data-act='feed-delete']").click(); await wait(20); const ok = t.$("[data-act='confirm']"); assert.equal(ok.disabled, true); assert.ok(t.$("[data-act='alt']"));
+  setVal(t, t.$("[data-field='typed']"), "broken feed"); assert.equal(ok.disabled, true, "the name must match exactly");
+  setVal(t, t.$("[data-field='typed']"), "Broken Feed"); assert.equal(ok.disabled, false); ok.click();
+  await until(() => t.w.mf.st.deleted && t.w.mf.st.deleted.length); await wait(150);
+  assert.ok(!t.$$(".frow .ftitle").some(e => e.textContent === "Broken Feed")); assert.ok(!t.$$(".side .lbl").some(e => e.textContent === "Broken Feed")); t.close();
+});
+test("the right-click menu offers Refresh, Rename and Move for a feed, and Rename folder for a folder", async () => {
+  const t = await mount(); const menu = async (id) => { t.$(`.side .trow[data-id="${id}"]`).dispatchEvent(new t.win.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 40 })); await wait(10); return [...t.win.document.querySelectorAll(".ctxmenu .ctxitem")].map(b => b.dataset.act); };
+  const feedActs = await menu("feed:1"); for (const a of ["mark-read", "feed-refresh", "feed-rename", "feed-move", "feed-delete"]) assert.ok(feedActs.includes(a), a);
+  t.key("Escape"); await wait(10); const folderActs = await menu("cat:Food"); for (const a of ["folder-refresh", "folder-rename", "move-up"]) assert.ok(folderActs.includes(a), a);
+  t.key("Escape"); await wait(10); assert.ok((await menu("all")).includes("refresh-all")); t.close();
+});
+test("renaming a folder from the menu renames it in Miniflux, keeps its place and follows the open scope", async () => {
+  const t = await mount(); t.$(`.side .trow[data-id="cat:Food"] .tbtn`).click(); await wait(100);
+  t.$(`.side .trow[data-id="cat:Food"]`).dispatchEvent(new t.win.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 40 })); await wait(10);
+  t.win.document.querySelector(".ctxitem[data-act='folder-rename']").click(); await wait(20); setVal(t, t.$("[data-field='text']"), "Kitchen"); t.$("[data-act='confirm']").click();
+  await until(() => t.w.mf.st.cats.some(c => c.title === "Kitchen")); await wait(200);
+  assert.ok(t.$(`.side .trow[data-id="cat:Kitchen"]`)); assert.equal(t.$(`.side .trow[data-id="cat:Food"]`), null); assert.equal(t.$(".side [aria-current='true']").closest(".trow").dataset.id, "cat:Kitchen"); t.close();
+});
+test("Refresh every feed asks Miniflux to fetch and says so", async () => {
+  const t = await mount(); await openFeeds(t); t.$("[data-act='refresh-all']").click(); await until(() => t.w.mf.st.calls.some(c => c.includes("/feeds/refresh"))); await wait(60);
+  assert.match(t.$(".toast").textContent, /Asked Miniflux to refresh every feed/); t.close();
+});
+test("the Sync page shows the Miniflux server tile with its version, a read-only check, and Got it after a change", async () => {
+  const t = await mount(); t.$$(".tab").find(b => b.textContent.includes("Sync")).click(); await until(() => t.$(".tile .tbig")); 
+  const tile = () => t.$$(".tile").find(x => x.textContent.includes("Miniflux server")); assert.ok(tile()); assert.match(tile().querySelector(".tbig").textContent, /2\.\d/);
+  tile().querySelector("[data-act='server-check']").click(); await until(() => t.$("[data-checks]")); assert.ok(t.$$("[data-checks] li").length >= 4); assert.ok(t.$$("[data-checks] li").some(l => /Version: Miniflux/.test(l.textContent)));
+  assert.equal(t.w.mf.st.calls.filter(c => c.startsWith("PUT") || c.startsWith("DELETE") || c.includes("/refresh")).length, 0, "the check changes nothing");
+  assert.equal(tile().querySelector("[data-act='server-ack']"), null);
+  t.w.mf.st.version = "2.9.0"; tile().querySelector("[data-act='server-check']").click(); await until(() => tile().dataset.state === "amber");
+  assert.equal(tile().dataset.state, "amber"); tile().querySelector("[data-act='server-ack']").click(); await until(() => !tile().querySelector("[data-act='server-ack']")); assert.equal(tile().dataset.state, "green"); t.close();
+});
+test("a library of several hundred articles builds in slices: the first rows at once, the rest by scrolling and by Expand all", async () => {
+  const t = await mount({ prep: (w) => { w.mf.st.feeds = Array.from({ length: 12 }, (_, i) => ({ ...w.mf.st.feeds[0], id: 20 + i, title: `Bulk ${i}` })); w.mf.st.entries = []; let id = 1000; for (let f = 0; f < 12; f++) for (let k = 0; k < 40; k++) w.mf.st.entries.push(entry(id++, 20 + f, `Bulk ${f} story ${k}`, "body text for the story", 1)); } });
+  await until(() => t.$$(".row").length >= 60); assert.ok(t.$$(".group").length === 12);
+  await until(() => t.$$(".row").length === 480, 8000); assert.equal(t.$$(".row").length, 480, "every article is eventually present"); t.close();
 });

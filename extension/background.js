@@ -20,7 +20,23 @@ const platform = {
     return docs;
   }
 };
-const engine = new Engine({ storage, platform, onChange: () => browser.runtime.sendMessage({ type: "changed" }).catch(() => {}) });
+let badgeTimer = null, badgeKey = "";
+const engine = new Engine({ storage, platform, onChange: () => { browser.runtime.sendMessage({ type: "changed" }).catch(() => {}); badgeSoon(); } });
+
+// The toolbar button wears a small mark when something needs attention, so a quiet server change or a failing connection is seen without opening the reader.
+// Red "!" means Miniflux or the WebDAV storage cannot be reached, or the server contract is broken; amber "!" means Miniflux changed or lacks a feature. A page with feeds still shows its own count.
+function badgeSoon() { if (badgeTimer) return; badgeTimer = setTimeout(() => { badgeTimer = null; updateBadge().catch(() => {}); }, 1500); }
+async function updateBadge() {
+  const a = browser.action; if (!a || !a.setBadgeText) return;
+  const st = engine.status(); const lamp = st.lights.find(x => x.id === "server"); const sv = lamp && lamp.state;
+  const down = st.lights.some(x => (x.id === "miniflux" || x.id === "webdav") && x.state === "red");
+  const state = down || sv === "red" ? "red" : sv === "amber" ? "amber" : "";
+  const title = state ? (sv === "red" || sv === "amber" ? lamp.sentence.split(". ")[0] + "." : "A connection is down. Open the Sync page.") : "";
+  const key = state + "|" + title; if (key === badgeKey) return; badgeKey = key;
+  await a.setBadgeText({ text: state ? "!" : "" });
+  if (state) { await a.setBadgeBackgroundColor({ color: state === "red" ? "#b3261e" : "#b26a00" }); if (a.setBadgeTextColor) await a.setBadgeTextColor({ color: "#ffffff" }); }
+  if (a.setTitle) await a.setTitle({ title: state ? "Pravaha: " + title : null });
+}
 
 // Firefox Sync carries keys, settings and look between machines. A new machine takes them without being asked.
 const profile = new ProfileSync({
@@ -53,6 +69,7 @@ async function runSync(opts) {
 browser.alarms.onAlarm.addListener(async (a) => { if (a.name === "poll") { await ready; try { await profile.pull(); } catch { /* shown on the Move setup tab */ } await runSync({ quiet: true }); } });
 browser.runtime.onInstalled.addListener(async () => { await ready; await schedule(); });
 browser.runtime.onStartup.addListener(async () => { await ready; await runSync(); });
+ready.then(badgeSoon).catch(() => {});
 browser.action.onClicked.addListener(async () => {
   const url = browser.runtime.getURL("ui/reader.html");
   const tabs = await browser.tabs.query({ url });

@@ -19,6 +19,9 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Reorders top-level folders by dragging them** (the cursor becomes a hand), with Alt+Up and Alt+Down as a keyboard alternative. The order reaches your other machines through Firefox Sync and through the reading-history log. Feeds are listed alphabetically inside each folder; their names and folders are set in Miniflux.
 - **Has a right-click menu on the folder list** (folders, feeds and All articles): Mark all read, with the same confirmation setting and an Undo, and Move up or Move down for top-level folders.
 - **Adds feeds from a website.** Press `a`, paste an address, Miniflux finds the feeds on it, pick one and a folder (or make a new one). Right-click any page or link, then "Subscribe with Pravaha", to open the same dialog with that address filled in.
+- **Manages feeds without leaving the reader (0.6.0).** Settings, Feeds lists every feed with its health, a filter and "only feeds with trouble". Rename, move to a folder (or a new one), disable or enable, refresh now and delete are there, and also in the right-click menu on a feed. Folders can be renamed and refreshed from their menu, and "Refresh every feed" is on the All articles menu. Every change is made in Miniflux first, then shown here. Delete needs the exact name typed and offers Disable instead.
+- **Watches the Miniflux server for silent changes (0.6.0).** The Sync page has a Miniflux server tile with the version, a light, and a read-only "Check server" button. Every refresh checks that Miniflux's answers have the fields Pravaha relies on and leaves out anything that does not, so a server update cannot quietly write wrong data. A changed version turns the light amber until you press "Got it", and the toolbar button wears a small "!" in amber or red.
+- **Refreshes lightly (0.6.0).** The two-minute poll asks Miniflux which articles are unread (numbers only) and downloads just the ones it lacks, instead of every unread article. If the server cannot do that, Pravaha falls back to the full download by itself and says so on the Sync page.
 - **Has an OLED black theme** besides light and dark, eleven reading fonts and five interface fonts, chosen from labelled cards with a live sample (all open fonts bundled; Apple's SF Pro and New York can be added for your own build, see below), and reading controls for size, line gap and width.
 - **Shows relevance as colour.** There are no Good, Great or Best tiers. Each row has a bar and a chip that darken as the score rises. Three palettes are included: ember, saffron and moss.
 - **Learns from what you do.** Opening in a tab, reading a card, reading for more than 15 seconds, saving and dismissing all move a feed's standing. They fade with a 14 day half life. Opens and saves also pull your interest profile toward the article.
@@ -97,6 +100,41 @@ Status lights on the desktop:
 ```
 
 Reading it: the shipbuilding and radiotherapy stories lead because the invented Raindrop library is full of both. After the laptop trains Harbour Weekly up, the desktop ranks its stories higher without ever having seen the click directly. The pasta story is gone from the desktop because the laptop dismissed it. The desktop never cached the radiotherapy story because the laptop had already opened it before the desktop's first fetch. The Feeds light is red because the invented Old Blog feed is failing, and it is excluded from ranking.
+
+New in 0.6.0, the same invented library, continued (`node tools/example-run.mjs` prints the whole run):
+
+```
+Second refresh on the laptop (nothing new):
+  light refresh, 4 requests, 662 bytes
+After one new article: light refresh, 5 requests, 987 bytes
+
+Feed management:
+  Renamed to “Table Talk Weekly”.
+  Moved “Table Talk Weekly” to Food/Baking.
+  Disabled “Table Talk Weekly”. Miniflux will stop fetching it until you enable it again.
+  Renamed “Defence” to “Maritime”.
+  The name typed did not match the feed, so nothing was deleted.
+
+Check server (read-only):
+  green  Version: Miniflux 2.3.5.
+  green  Entry numbers: working (4 unread). Refreshes download only what is new.
+  green  New articles: working.
+  green  Feeds: 4 read.
+  off    Refreshing one folder is not tried here, because it would make Miniflux fetch feeds. It is checked the first time you use it.
+
+Folder tree now:
+  Maritime (2)
+    Shipbuilding (2)
+      Harbour Weekly (2)
+  Food (2)
+    Baking (1)
+      Table Talk Weekly (1)
+    Old Blog (1)
+  Medicine
+    Clinic Notes
+```
+
+Reading it: with nothing new the second refresh is a light one that asks for numbers only; a single new article adds one request. The feed changes are made in Miniflux and shown in the folder tree. Renaming "Defence" also renamed the folder inside it, because folders are Miniflux categories whose titles are paths. A delete with the wrong name is refused. The check reads only; the last line is there because trying a folder refresh would make Miniflux fetch real feeds. The code, the servers and every number above are synthetic and illustrative; they say how the program behaves, not how your Miniflux will.
 
 ## Getting started
 
@@ -238,7 +276,7 @@ See [DEPLOY.md](DEPLOY.md). The short version: download `pravaha.xpi` from the l
 
 ```
 npm install
-npm test                       # 143 tests
+npm test                       # 200 tests
 node tools/failure-rates.mjs   # random failure injection, see docs/FAILURE_RATES.md
 npm run lint                   # Mozilla's web-ext lint
 ```
@@ -247,6 +285,8 @@ The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. 
 
 ## What has not been verified
 
+- **Everything new in 0.6.0 is untested against a real Miniflux.** The entry-number call (`GET /entries/ids`, Miniflux 2.3.2 or newer), the position marker (`after_entry_id`), feed and folder changes (`PUT /feeds/{id}`, `PUT /categories/{id}`, `DELETE /feeds/{id}`) and the refresh calls follow the documentation and are tested against fakes and in real Firefox against a fake server. The Check server button on the Sync page is how you find out on your own server; if a call is missing there, Pravaha uses the older path by itself. Folder and all-feed refresh only show their effect the first time you use them. A folder rename that fails part-way leaves some folders renamed; the message says which, and the page then follows Miniflux.
+- **Speed numbers are from a headless benchmark on synthetic data** (see CHANGELOG), not from your library on your machine.
 - **Real Firefox, with limits.** Since 0.4.0 the setup-moving, status and quiet-poll behaviour is exercised in real Firefox 160 (the base of Zen) with `tools/firefox-e2e/`. Zen itself, a long-running profile and the older 0.3.x screens (scroll behaviour, the right-click menu) have not been driven that way.
 - **Firefox Sync's cloud was not reached.** The e2e copies `storage.sync` items between profiles, which is what Firefox does, but real delivery, its timing, the size limits quoted in SCHEMA.md and the "Add-ons ticked" requirement come from documentation and are unverified.
 - **New Miniflux calls in 0.3.0 are untested against a real server.** `POST /discover`, `POST /feeds`, `POST /categories`, the `search` filter on `/entries`, and the chunked `PUT /entries` with a read-back check follow the documented API and are tested against fakes only. How Miniflux words its errors, and how long a new feed takes to fetch its first articles, are guesses from the documentation. If one misbehaves, the message shown is Miniflux's own.

@@ -6,21 +6,24 @@ import { anchorTree } from "../src/anchor.js";
 import { loadPrefs, normalisePrefs, savePrefs, applyPrefs, clamp, READ_FONTS, UI_FONTS, FONT_INFO, CONFIRM_MODES } from "./prefs.js";
 
 const $app = document.getElementById("app");
-const MUTATING = new Set(["markRead", "markUnread", "markScope", "save", "dismiss", "undismissAll", "syncNow", "subscribe", "searchServer", "card", "open"]);
+const MUTATING = new Set(["markRead", "markUnread", "markScope", "save", "dismiss", "undismissAll", "syncNow", "subscribe", "searchServer", "card", "open", "feedUpdate", "feedDelete", "folderRename", "refreshScope"]);
 const send = async (m) => {
   if (MUTATING.has(m.type)) setTimeout(kickSync, 60);
   try { return await browser.runtime.sendMessage(m); } catch (e) { toast("The background page did not answer. Reload the extension if this keeps happening.", { kind: "error" }); throw e; }
 };
+// Optional timing for development: set localStorage "pravaha.perf" to 1, then read window.__pvPerf. Off by default.
+const PERF = (() => { try { return localStorage.getItem("pravaha.perf") === "1"; } catch { return false; } })();
+const tm = PERF ? (name, fn) => { const t0 = performance.now(); const r = fn(); (window.__pvPerf ||= {})[name] = Math.round((performance.now() - t0) * 10) / 10; return r; } : (name, fn) => fn();
 const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } };
 
 export const S = {
   tab: lsGet("pravaha.tab", "feed"), scope: "all", mode: "unread", ranked: false, q: "",
   settings: null, tree: [], status: null, rules: [], data: null, icons: {}, iconCount: 0, unread: 0,
-  rows: new Map(), openCard: null, selId: null, keep: new Set(), content: {}, tags: {}, limits: {},
+  rows: new Map(), rowGroup: new Map(), openCard: null, selId: null, keep: new Set(), content: {}, tags: {}, limits: {},
   collapsed: new Set(lsGet("pravaha.collapsed", [])), auto: new Set(), treeCollapsed: new Set(lsGet("pravaha.treeCollapsed", [])),
   newIds: new Set(), pop: null, help: false, toast: "", busy: false, stats: null, searchIn: "all", moved: null, dialog: null, syncFlash: 0,
-  stab: "connections", ytab: "overview", draft: null, tests: {}, dirty: false
+  stab: "connections", ytab: "overview", feedsInfo: null, fq: "", fprob: false, fpage: 1, serverLines: null, serverBusy: false, draft: null, tests: {}, dirty: false
 };
 let U = loadPrefs();
 const prefersDark = () => !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -67,8 +70,12 @@ const iconFor = (feedId, title) => {
 const gradeOf = (score) => { const d = disp(score); const c = gradeColor(d, U.palette); return { d, bg: c.bg, fg: c.fg }; };
 const isFeedTab = () => S.tab === "feed" || S.tab === "saved";
 const rowEls = () => Array.from($app.querySelectorAll(".group[data-collapsed='false'] .row:not([data-leaving='true'])"));
-const rowElById = (id) => $app.querySelector(`.row[data-id="${id}"]`);
-const groupOf = (id) => (S.data ? S.data.groups.find(g => g.rows.some(r => r.id === id)) : null);
+// Asking for a row whose section has not been built yet builds that section first, so nothing that selects or opens an article can miss it.
+const rowElById = (id, build = true) => {
+  const q = () => $app.querySelector(`.row[data-id="${id}"]`); const el = q(); if (el || !build) return el;
+  const g = S.rowGroup.get(id); if (g && g.pending) { fillNow(g); return q(); } return null;
+};
+const groupOf = (id) => S.rowGroup.get(id) || null;
 const isCollapsed = (key) => S.collapsed.has(key) || S.auto.has(key);
 
 // ---------- data ----------
@@ -77,15 +84,16 @@ async function loadSearch() {
   const [r, t] = await Promise.all([send({ type: "search", q: searchQuery() }), send({ type: "tree" })]);
   S.tree = t.tree; S.status = t.status; S.unread = t.unreadTotal;
   S.data = { search: true, terms: r.terms || [], indexSize: r.indexSize, empty: r.empty, groups: r.rows.length ? [{ key: "search", search: true, title: "Search results", unread: r.rows.filter(x => !x.read).length, rows: r.rows }] : [], total: r.rows.length, unreadTotal: S.unread, dismissedCount: 0, iconCount: S.iconCount };
-  S.rows = new Map(); for (const row of r.rows) S.rows.set(row.id, row);
+  S.rows = new Map(); S.rowGroup = new Map(); for (const row of r.rows) { S.rows.set(row.id, row); S.rowGroup.set(row.id, S.data.groups[0]); }
   if (S.openCard && !S.rows.has(S.openCard)) stopDwell(), S.openCard = null;
   render();
 }
 async function loadView() {
   if (S.q.trim()) return loadSearch();
-  const r = await send({ type: "view", params: { scope: S.tab === "saved" ? "saved" : S.scope, mode: S.mode, ranked: S.ranked, q: S.q, keep: [...S.keep] } });
+  const tv = PERF ? performance.now() : 0; const r = await send({ type: "view", params: { scope: S.tab === "saved" ? "saved" : S.scope, mode: S.mode, ranked: S.ranked, q: S.q, keep: [...S.keep] } });
+  if (PERF) (window.__pvPerf ||= {}).viewRoundTrip = Math.round(performance.now() - tv);
   S.data = r.view; S.tree = r.tree; S.status = r.status; S.unread = r.view.unreadTotal; S.newIds = new Set();
-  S.rows = new Map(); for (const g of S.data.groups) for (const row of g.rows) S.rows.set(row.id, row);
+  S.rows = new Map(); S.rowGroup = new Map(); for (const g of S.data.groups) for (const row of g.rows) { S.rows.set(row.id, row); S.rowGroup.set(row.id, g); }
   if (S.data.iconCount !== S.iconCount) { S.iconCount = S.data.iconCount; S.icons = (await send({ type: "icons" })) || {}; }
   if (S.openCard && !S.rows.has(S.openCard)) stopDwell(), S.openCard = null;
   render();
@@ -112,7 +120,7 @@ const softReload = debounce(async () => {
     for (const n of rs.rows) { const old = S.rows.get(n.id); if (old && (old.read !== n.read || old.saved !== n.saved)) { Object.assign(old, { read: n.read, saved: n.saved }); patchRow(old); } }
     return;
   }
-  if (!isFeedTab() || !S.data) { refreshChrome(); if (S.tab === "sync") { S.status = await send({ type: "status" }); S.stats = await send({ type: "stats" }); renderMain(); } return; }
+  if (!isFeedTab() || !S.data) { refreshChrome(); if (S.tab === "sync") { S.status = await send({ type: "status" }); S.stats = await send({ type: "stats" }); renderMain(); } else if (S.tab === "settings" && S.stab === "feeds") loadFeedsInfo(); return; }
   const r = await send({ type: "view", params: { scope: S.tab === "saved" ? "saved" : S.scope, mode: S.mode, ranked: S.ranked, q: S.q, keep: [...S.keep] } });
   S.tree = r.tree; S.status = r.status; S.unread = r.view.unreadTotal; let fresh = 0;
   for (const g of r.view.groups) for (const n of g.rows) {
@@ -183,6 +191,30 @@ function askConfirm({ title, body, confirmLabel = "OK", cancelLabel = "Cancel", 
     ok.focus();
   });
 }
+// One small form dialog for the feed and folder actions: a text box, a folder picker, or a typed confirmation. It resolves with the answer, or null if cancelled.
+// kind "text" asks for a name; "folder" asks for a folder (existing, or New folder…); "typed" asks for the exact name before a delete.
+function askForm({ title, body = [], kind = "text", value = "", label = "", options = [], expect = "", confirmLabel = "Save", danger = false, alt = null }) {
+  return new Promise((resolve) => {
+    S.dialog = "form"; const done = (v) => { closeDialog(); resolve(v); }; S.dialogCancel = () => done(null);
+    const isSel = kind === "folder"; const NEW = "__new__";
+    const input = isSel
+      ? h("select", { "aria-label": label || "Folder", "data-field": "folder" }, ...options.map(o => h("option", { value: o, selected: o === value }, o)), h("option", { value: NEW }, "New folder…"))
+      : h("input", { type: "text", value, "aria-label": label || title, "data-field": kind, autocomplete: "off", spellcheck: "false", placeholder: kind === "typed" ? expect : "" });
+    const fresh = h("input", { type: "text", "aria-label": "New folder name", "data-field": "newfolder", placeholder: "Folder or Parent/Child", hidden: true, autocomplete: "off" });
+    const ok = h("button", { class: "btn " + (danger ? "danger" : "primary"), "data-act": "confirm", disabled: kind === "typed" ? true : null }, confirmLabel);
+    const val = () => isSel ? (input.value === NEW ? fresh.value.trim() : input.value) : input.value;
+    const gate = () => { ok.disabled = kind === "typed" ? input.value.trim() !== expect.trim() : !val().trim(); };
+    const submit = () => { if (!ok.disabled) done(val()); };
+    input.addEventListener("input", gate); fresh.addEventListener("input", gate);
+    if (isSel) input.addEventListener("change", () => { fresh.hidden = input.value !== NEW; if (!fresh.hidden) fresh.focus(); gate(); });
+    const keys = (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } };
+    input.addEventListener("keydown", keys); fresh.addEventListener("keydown", keys); ok.addEventListener("click", submit);
+    dialogHost().replaceChildren(h("div", { class: "overlay", onclick: () => done(null) }, h("div", { class: "dialog narrow", role: "dialog", "aria-label": title, onclick: (e) => e.stopPropagation() },
+      h("h2", {}, title), ...[].concat(body).map(t => h("p", {}, t)), h("label", { class: "field" }, h("span", {}, label), input), isSel ? fresh : null,
+      h("div", { class: "dfoot" }, alt ? h("button", { class: "btn", "data-act": "alt", onclick: () => done({ alt: true }) }, alt) : null, h("button", { class: "btn", "data-act": "cancel", onclick: () => done(null) }, "Cancel"), ok))));
+    gate(); input.focus(); if (!isSel && input.select) input.select();
+  });
+}
 // Feed detection needs Firefox's all-websites permission, so Pravaha explains it first in its own words. Firefox then shows its own prompt.
 const ALL_SITES = ["https://*/*", "http://*/*"];
 async function loadDetect() { try { S.detect = await send({ type: "feedDetectState" }); } catch { S.detect = { on: false, unavailable: true }; } if (S.tab === "settings" && S.stab === "machine") renderMain(); }
@@ -216,7 +248,7 @@ const confirmIf = (kind, body) => { const m = U.confirmRead; return m === "never
 
 // ---------- actions ----------
 function patchRow(r) {
-  const el = rowElById(r.id); if (!el) return;
+  const gr = groupOf(r.id); const el = rowElById(r.id, false); if (!el) { if (gr) updateGroupHead(gr); return; }
   el.dataset.read = String(r.read); el.dataset.saved = String(r.saved); el.dataset.pending = String(!!r.pending);
   const pd = el.querySelector(".pdot"); if (r.pending && !pd) { const nd = el.querySelector(".newdot"); if (nd) nd.after(h("span", { class: "pdot", title: "Sending to Miniflux" })); } else if (!r.pending && pd) pd.remove();
   const g = gradeOf(r.score); el.style.setProperty("--grade", g.bg); el.style.setProperty("--gfg", g.fg);
@@ -224,7 +256,7 @@ function patchRow(r) {
   const sv = el.querySelector("[data-act='save']"); if (sv) { sv.replaceChildren(icon("star", 17, r.saved)); sv.setAttribute("aria-pressed", String(r.saved)); sv.title = r.saved ? "Remove from saved (s)" : "Save (s)"; }
   const rd = el.querySelector("[data-act='read']"); if (rd) rd.textContent = r.read ? "Mark unread" : "Mark read";
   const cs = el.querySelector("[data-act='cardsave'] span"); if (cs) cs.textContent = r.saved ? "Saved" : "Save";
-  const gr = groupOf(r.id); if (gr) updateGroupHead(gr);
+  if (gr) updateGroupHead(gr);
 }
 function markRowsLocal(ids) {
   const fresh = ids.filter(id => S.rows.get(id) && !S.rows.get(id).read);
@@ -265,7 +297,7 @@ function dismissRow(r) {
   if (S.openCard === r.id) closeCard(r, true);
   if (el) { el.style.maxHeight = el.offsetHeight + "px"; requestAnimationFrame(() => { el.dataset.leaving = "true"; }); setTimeout(() => el.remove(), 260); }
   if (g) { g.rows = g.rows.filter(x => x.id !== r.id); updateGroupHead(g); }
-  S.rows.delete(r.id); if (S.data) S.data.dismissedCount = (S.data.dismissedCount || 0) + 1; const oldSub = $app.querySelector(".sub"); if (oldSub) oldSub.replaceWith(feedSub());
+  S.rows.delete(r.id); S.rowGroup.delete(r.id); if (S.data) S.data.dismissedCount = (S.data.dismissedCount || 0) + 1; const oldSub = $app.querySelector(".sub"); if (oldSub) oldSub.replaceWith(feedSub());
   send({ type: "dismiss", id: r.id }); toast("Dismissed. The feed's standing drops a little.", { kind: "info", action: { label: "Undo", fn: async () => { await send({ type: "undismissAll" }); S.auto.clear(); loadView(); } } }); refreshChrome();
 }
 // Background open: a real tab, counted as an open (the strongest everyday signal).
@@ -404,11 +436,12 @@ function toggleGroup(g) {
   if (was) S.collapsed.delete(g.key); else S.collapsed.add(g.key);
   lsSet("pravaha.collapsed", [...S.collapsed]);
   if (g.el) { g.el.dataset.collapsed = String(!was); g.el.querySelector(".gtoggle")?.setAttribute("aria-expanded", String(was)); }
+  if (was && g.pending) fillNow(g);
   if (!was && S.openCard && g.rows.some(r => r.id === S.openCard)) closeCard(S.rows.get(S.openCard), true);
 }
 function setAllGroups(collapse) {
   for (const g of S.data.groups) { S.auto.delete(g.key); collapse ? S.collapsed.add(g.key) : S.collapsed.delete(g.key); if (g.el) { g.el.dataset.collapsed = String(collapse); g.el.querySelector(".gtoggle")?.setAttribute("aria-expanded", String(!collapse)); } }
-  lsSet("pravaha.collapsed", [...S.collapsed]); if (collapse && S.openCard) closeCard(S.rows.get(S.openCard), true);
+  lsSet("pravaha.collapsed", [...S.collapsed]); if (collapse && S.openCard) closeCard(S.rows.get(S.openCard), true); if (!collapse) kickFill();
 }
 const foldGroup = (g) => { S.auto.add(g.key); if (g.el) { g.el.dataset.collapsed = "true"; g.el.querySelector(".gtoggle")?.setAttribute("aria-expanded", "false"); } if (S.openCard && g.rows.some(r => r.id === S.openCard)) closeCard(S.rows.get(S.openCard), true); };
 const plural = (n) => `${n} ${n === 1 ? "article" : "articles"}`;
@@ -437,8 +470,38 @@ function fillGroupRows(g, inner) {
   const limit = S.limits[g.key] || 120; inner.replaceChildren(...g.rows.slice(0, limit).map(rowEl));
   if (g.rows.length > limit) inner.append(h("button", { class: "more", onclick: () => { S.limits[g.key] = limit + 200; fillGroupRows(g, inner); observeRows(); } }, `Show ${Math.min(200, g.rows.length - limit)} more of ${g.rows.length - limit} remaining`));
 }
+// A long list is built in slices: the first screens at once, the rest a few sections per frame, nearest the viewport first.
+// A section that is folded, or not reached yet, shows only its header and keeps roughly its height until its rows are built.
+const FIRST_ROWS = 60, SLICE_MS = 9, LAZY_FROM = 150; let fillToken = 0;
+const estRowH = () => (U.density === "compact" ? 52 : 84);
+function planFill(groups) {
+  const total = groups.reduce((n, g) => n + g.rows.length, 0); let built = 0;
+  for (const g of groups) {
+    const now = total <= LAZY_FROM || built < FIRST_ROWS || g.rows.some(r => r.id === S.openCard || r.id === S.selId);
+    g.pending = !now; if (now) built += Math.min(g.rows.length, 120);
+  }
+}
+function fillNow(g) {
+  if (!g.pending || !g.el) return; const inner = g.el.querySelector(".gin"); g.pending = false; if (!inner) return;
+  inner.style.minHeight = ""; fillGroupRows(g, inner);
+  if (io) for (const el of inner.querySelectorAll(".row[data-read='false']")) io.observe(el);
+}
+function kickFill() {
+  const token = ++fillToken; if (!S.data || S.data.search || !S.data.groups.some(g => g.pending)) return;
+  const wanted = (g) => g.pending && g.el && g.el.isConnected && !isCollapsed(g.key);
+  const step = () => {
+    if (token !== fillToken || !S.data) return; const t0 = performance.now(); const vh = window.innerHeight || 800;
+    for (const g of S.data.groups) {   // the sections on or near the screen come first
+      if (!wanted(g)) continue; const r = g.el.getBoundingClientRect(); if (r.bottom > -vh && r.top < vh * 2) fillNow(g);
+      if (performance.now() - t0 > SLICE_MS) break;
+    }
+    if (performance.now() - t0 <= SLICE_MS) for (const g of S.data.groups) { if (!wanted(g)) continue; fillNow(g); if (performance.now() - t0 > SLICE_MS) break; }
+    if (S.data.groups.some(wanted)) requestAnimationFrame(step); else if (!S.data.groups.some(g => g.pending)) observeRows();
+  };
+  requestAnimationFrame(step);
+}
 function groupEl(g) {
-  const inner = h("div", { class: "gin" }); fillGroupRows(g, inner);
+  const inner = h("div", { class: "gin" }); if (g.pending) inner.style.minHeight = Math.min(g.rows.length, 120) * estRowH() + "px"; else fillGroupRows(g, inner);
   g.el = h("section", { class: "group", data: { key: g.key, collapsed: String(isCollapsed(g.key)) } }, groupHead(g), h("div", { class: "gwrap" }, inner)); return g.el;
 }
 function showBanner() {
@@ -481,6 +544,7 @@ function feedMain() {
       : h("div", { class: "empty" }, h("div", { class: "t" }, d.empty ? "Type something to search" : "Nothing matches"), h("div", {}, d.empty ? "Use words, #tags, feed: names or quotes." : "Try fewer words, or ask Miniflux for older articles with the button above.")), tips());
     return [sub, body];
   }
+  if (d && !d.search) planFill(d.groups);
   const body = d && d.groups.length ? h("div", { class: "feeds density-" + (U.density === "compact" ? "compact" : "comfortable") }, d.groups.map(groupEl))
     : h("div", { class: "empty" }, h("div", { class: "t" }, S.tab === "saved" ? "Nothing saved yet" : S.settings.miniflux.token ? "You are all caught up" : "Connect Miniflux to begin"),
       h("div", {}, S.tab === "saved" ? "Press s on an article and it will appear here." : S.settings.miniflux.token ? "No unread articles match this view. Try the All toggle." : "Open Settings and add your server address and API key."));
@@ -533,7 +597,7 @@ const isTopFolder = (n) => !!n && n.type === "folder" && !n.parent;
 function sideBar() {
   const byId = new Map(S.tree.map(n => [n.id, n]));
   const hidden = (n) => { for (let p = n.parent && byId.get(n.parent); p; p = p.parent && byId.get(p.parent)) if (S.treeCollapsed.has(p.id)) return true; return false; };
-  const hasKids = (n) => S.tree.some(x => x.parent === n.id);
+  const parents = new Set(); for (const x of S.tree) if (x.parent) parents.add(x.parent); const hasKids = (n) => parents.has(n.id);
   const open = (id) => { S.scope = id; if (S.tab !== "feed") { S.tab = "feed"; lsSet("pravaha.tab", "feed"); } S.keep = new Set(); loadView(); };
   const rows = S.tree.filter(n => !hidden(n)).map(n => {
     const chev = n.type === "folder" && hasKids(n) ? h("button", { class: "chev", "aria-label": (S.treeCollapsed.has(n.id) ? "Expand " : "Collapse ") + n.label, "aria-expanded": String(!S.treeCollapsed.has(n.id)), onclick: () => { S.treeCollapsed.has(n.id) ? S.treeCollapsed.delete(n.id) : S.treeCollapsed.add(n.id); lsSet("pravaha.treeCollapsed", [...S.treeCollapsed]); renderChrome(); } }, icon("chev", 14)) : h("span", { class: "chev" });
@@ -554,43 +618,127 @@ function sideBar() {
     h("p", { class: "sidenote", "data-note": "feed-order" }, "Drag a folder to move it, or press Alt with the up and down arrows. Feeds are listed alphabetically inside each folder; their names and folders are set in ",
       base ? h("a", { href: base + "/feeds", target: "_blank", rel: "noopener noreferrer" }, "Miniflux") : "Miniflux", "."));
 }
-const reloadGroups = debounce(() => { if (isFeedTab()) loadView(); }, 500);
-const focusNode = (id) => [...document.querySelectorAll(".side .trow[data-id]")].find(r => r.dataset.id === id)?.querySelector(".tbtn")?.focus();
-async function applyOrder(r) { if (r && r.tree) { S.tree = r.tree; renderChrome(); if (r.moved) reloadGroups(); } }
-async function moveNode(id, dir, keepFocus) {
-  const r = await send({ type: "moveNode", id, dir }); if (r && r.moved) { S.moved = id; clearTimeout(moveNode.t); moveNode.t = setTimeout(() => { S.moved = null; }, 900); }
-  await applyOrder(r); if (keepFocus) focusNode(id);
+// ---------- folder order: drag, keys and menu ----------
+// A move is shown at once on the page and then confirmed by the background page. Nothing is rebuilt unless the two disagree.
+const rowNodeEl = (id) => [...document.querySelectorAll(".side .trow[data-id]")].find(r => r.dataset.id === id);
+const focusNode = (id) => rowNodeEl(id)?.querySelector(".tbtn")?.focus();
+function renderSide() {
+  const body = $app.querySelector(".body"); const old = body && body.querySelector(".side"); if (!old) return renderChrome();
+  const keep = old.scrollTop; const fresh = sideBar(); old.replaceWith(fresh); fresh.scrollTop = keep;
 }
-// Dragging a top-level folder. A pointer must travel a few pixels first, so a plain click still opens the folder.
-function folderBlocks(side) {
-  const out = []; const sr = side.getBoundingClientRect();
-  for (const el of side.querySelectorAll(".trow[data-id]")) {
-    const n = S.tree.find(x => x.id === el.dataset.id); if (!n) continue; const r = el.getBoundingClientRect();
-    if (isTopFolder(n)) out.push({ id: n.id, top: r.top - sr.top + side.scrollTop, bottom: r.bottom - sr.top + side.scrollTop, y0: r.top, y1: r.bottom });
-    else if (n.parent && out.length) { out[out.length - 1].bottom = r.bottom - sr.top + side.scrollTop; out[out.length - 1].y1 = r.bottom; }
-  }
+// The tree is a flat list. Each top-level folder owns the rows after it, up to the next top-level folder.
+function orderTree(tree, ids) {
+  const blocks = new Map(); const head = []; let cur = null;
+  for (const n of tree) { if (isTopFolder(n)) { cur = []; blocks.set(n.id, cur); } (cur || head).push(n); }
+  const out = [...head]; const seen = new Set();
+  for (const id of ids) if (blocks.has(id) && !seen.has(id)) { seen.add(id); out.push(...blocks.get(id)); }
+  for (const [id, b] of blocks) if (!seen.has(id)) out.push(...b);
+  const tops = out.filter(isTopFolder); tops.forEach((n, i) => { n.first = i === 0; n.last = i === tops.length - 1; });
   return out;
 }
-function dropIndex(blocks, y) { for (let i = 0; i < blocks.length; i++) if (y < (blocks[i].y0 + blocks[i].y1) / 2) return i; return blocks.length; }
+// Puts `els` in the wanted order inside `host` by moving as few of them as possible: the longest run that is already in the right
+// order stays where it is, and only the others are moved. Moving one folder past a few others therefore touches only the folder.
+function placeInOrder(host, els, anchor) {
+  const cur = new Map(); let k = 0; for (const c of host.children) cur.set(c, k++);
+  const pos = els.map(e => cur.get(e)); const n = pos.length; if (!n) return;
+  const tail = [], prev = new Array(n).fill(-1); // patience sorting for the longest increasing subsequence
+  for (let i = 0; i < n; i++) {
+    let lo = 0, hi = tail.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (pos[tail[mid]] < pos[i]) lo = mid + 1; else hi = mid; }
+    if (lo > 0) prev[i] = tail[lo - 1]; tail[lo] = i;
+  }
+  const keep = new Set(); for (let i = tail[tail.length - 1]; i >= 0; i = prev[i]) keep.add(i);
+  let before = anchor;
+  for (let i = 0; i < n; i++) { if (!keep.has(i)) { if (before) before.after(els[i]); else host.prepend(els[i]); } before = els[i]; }
+}
+function moveRows(side) {
+  const by = new Map(); for (const el of side.querySelectorAll(".trow[data-id]")) by.set(el.dataset.id, el);
+  placeInOrder(side, S.tree.map(n => by.get(n.id)).filter(Boolean), by.get("all"));
+}
+// The sections in the article list follow the folder order without asking for the whole list again.
+function reorderGroups() {
+  if (!S.data || S.data.search || S.ranked || !isFeedTab()) return;
+  const pos = new Map(S.tree.map((n, i) => [n.id, i])); const gs = S.data.groups; const at = (g) => (pos.has(g.key) ? pos.get(g.key) : 1e9);
+  gs.sort((a, b) => at(a) - at(b) || a.title.localeCompare(b.title));
+  const host = gs.find(g => g.el && g.el.parentNode)?.el.parentNode; if (!host) return;
+  placeInOrder(host, gs.map(g => g.el).filter(el => el && el.parentNode === host), null);
+}
+// A dropped folder slides from where it was let go to its place. Transform only, so it never forces layout while moving.
+function glide(el, from) {
+  if (!el || !el.isConnected) return; const dy = from - el.getBoundingClientRect().top; if (Math.abs(dy) < 2) return;
+  el.style.transition = "none"; el.style.transform = `translate3d(0,${Math.round(dy)}px,0)`; void el.offsetHeight;
+  el.style.transition = "transform .2s var(--ease)"; el.style.transform = "";
+  const done = () => { el.style.transition = ""; }; el.addEventListener("transitionend", done, { once: true }); setTimeout(done, 280);
+}
+function settleTree(tree) {
+  if (!tree) return; const same = tree.length === S.tree.length && tree.every((x, i) => x.id === S.tree[i].id);
+  S.tree = tree; if (!same) { renderSide(); reorderGroups(); }
+}
+async function commitOrder(ids, el, from) {
+  const side = $app.querySelector(".side"); const before = S.tree.map(x => x.id).join("|");
+  S.tree = orderTree(S.tree, ids); const changed = S.tree.map(x => x.id).join("|") !== before;
+  if (side && changed) moveRows(side);
+  if (el) glide(el, from);
+  if (!changed) return;
+  if (el) { el.classList.add("dropped"); setTimeout(() => el.classList.remove("dropped"), 900); }
+  setTimeout(reorderGroups, 240);
+  try { settleTree((await send({ type: "reorderFolders", ids })).tree); } catch { settleTree(((await send({ type: "tree" }).catch(() => null)) || {}).tree); }
+}
+async function moveNode(id, dir, keepFocus) {
+  const tops = S.tree.filter(isTopFolder).map(x => x.id); const i = tops.indexOf(id), j = i + (dir === "up" ? -1 : 1); if (i < 0 || j < 0 || j >= tops.length) return;
+  [tops[i], tops[j]] = [tops[j], tops[i]]; const el = rowNodeEl(id);
+  await commitOrder(tops, el, el ? el.getBoundingClientRect().top : 0); if (keepFocus) focusNode(id);
+}
+// Dragging a top-level folder. A pointer must travel a few pixels first, so a plain click still opens the folder.
+// Everything is measured once when the drag begins. After that each frame only does arithmetic and writes two transforms.
 function startDrag(e, n, row) {
   if (e.button !== 0 || S.dialog) return;
-  const side = row.closest(".side"); const x0 = e.clientX, y0 = e.clientY; let on = false, idx = -1, line = null;
-  const cleanup = () => { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); document.removeEventListener("pointercancel", cancel); document.removeEventListener("keydown", key, true); document.body.classList.remove("dragging-folder"); row.classList.remove("lift"); line?.remove(); };
+  const side = row.closest(".side"); const x0 = e.clientX, y0 = e.clientY;
+  let on = false, line = null, shield = null, blocks = [], own = -1, idx = -1, py = y0, raf = 0, base = 0, sideTop = 0, minDy = 0, maxDy = 0, still = null;
+  const frame = () => {
+    raf = 0; if (!on) return;
+    const rel = py - sideTop, sh = side.clientHeight; let sp = 0;
+    if (side.scrollHeight <= sh) { /* nothing to scroll */ } else if (rel < 40) sp = -Math.ceil((40 - Math.max(rel, 0)) / 40 * 14); else if (rel > sh - 40) sp = Math.ceil((40 - Math.max(sh - rel, 0)) / 40 * 14);
+    if (sp) side.scrollTop += sp;
+    const cy = rel + side.scrollTop; let i = 0; while (i < blocks.length && cy >= blocks[i].mid) i++; idx = i;
+    const y = i < blocks.length ? blocks[i].top : blocks[blocks.length - 1].bottom;
+    line.style.transform = `translate3d(0,${Math.round(y - 1)}px,0)`;
+    row.style.transform = `translate3d(0,${Math.round(Math.max(minDy, Math.min(maxDy, py - y0 + side.scrollTop - base)))}px,0)`;
+    const st = idx === own || idx === own + 1; if (st !== still) { still = st; line.dataset.still = String(st); }
+    if (sp) raf = requestAnimationFrame(frame);
+  };
+  const begin = () => {
+    const byId = new Map(S.tree.map(x => [x.id, x])); const sr = side.getBoundingClientRect(); sideTop = sr.top; base = side.scrollTop;
+    for (const el of side.querySelectorAll(".trow[data-id]")) {
+      const nd = byId.get(el.dataset.id); if (!nd) continue; const r = el.getBoundingClientRect(); const top = r.top - sr.top + base, bottom = r.bottom - sr.top + base;
+      if (isTopFolder(nd)) blocks.push({ id: nd.id, top, bottom, mid: 0 }); else if (nd.parent && blocks.length) blocks[blocks.length - 1].bottom = bottom;
+    }
+    own = blocks.findIndex(b => b.id === n.id); if (own < 0) return false;
+    for (const b of blocks) b.mid = (b.top + b.bottom) / 2;
+    minDy = blocks[0].top - blocks[own].top; maxDy = blocks[blocks.length - 1].bottom - blocks[own].top - row.offsetHeight;
+    on = true; document.body.classList.add("dragging-folder"); row.classList.add("lift");
+    shield = h("div", { class: "dragshield", "aria-hidden": "true" }); document.body.append(shield);
+    line = h("div", { class: "dropline", "aria-hidden": "true" }); side.append(line); frame(); return true;
+  };
+  const cleanup = () => {
+    on = false; if (raf) cancelAnimationFrame(raf); raf = 0;
+    document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); document.removeEventListener("pointercancel", cancel); document.removeEventListener("keydown", key, true);
+    document.body.classList.remove("dragging-folder"); row.classList.remove("lift"); line?.remove(); shield?.remove();
+  };
   const move = (ev) => {
-    if (!on) { if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return; on = true; document.body.classList.add("dragging-folder"); row.classList.add("lift"); line = h("div", { class: "dropline", "aria-hidden": "true" }); side.append(line); }
-    ev.preventDefault(); const blocks = folderBlocks(side); if (!blocks.length) return; idx = dropIndex(blocks, ev.clientY);
-    const y = idx < blocks.length ? blocks[idx].top : blocks[blocks.length - 1].bottom; line.style.top = Math.round(y - 1) + "px";
-    const own = blocks.findIndex(b => b.id === n.id); line.dataset.still = String(idx === own || idx === own + 1);
+    py = ev.clientY;
+    if (!on) { if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6 || !begin()) return; }
+    ev.preventDefault(); if (!raf) raf = requestAnimationFrame(frame);
   };
-  const finish = async (go) => {
-    const blocks = on ? folderBlocks(side) : []; const at = idx; const was = on; cleanup();
-    if (was) { const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); }; window.addEventListener("click", stop, { capture: true, once: true }); setTimeout(() => window.removeEventListener("click", stop, true), 60); }
-    if (!was || !go || at < 0 || !blocks.length) return;
-    const ids = blocks.map(b => b.id); const from = ids.indexOf(n.id); if (from < 0) return; ids.splice(from, 1); ids.splice(at > from ? at - 1 : at, 0, n.id);
-    if (ids.join("|") === blocks.map(b => b.id).join("|")) return;
-    S.moved = n.id; setTimeout(() => { S.moved = null; }, 900); await applyOrder(await send({ type: "reorderFolders", ids }));
+  const finish = (go, ev) => {
+    const was = on; if (raf) cancelAnimationFrame(raf); raf = 0;
+    if (was && go && ev) { py = ev.clientY; frame(); if (raf) cancelAnimationFrame(raf); raf = 0; }
+    const at = idx; const from = row.getBoundingClientRect().top; cleanup(); row.style.transform = "";
+    if (!was) return;
+    const stop = (c) => { c.stopPropagation(); c.preventDefault(); }; window.addEventListener("click", stop, { capture: true, once: true }); setTimeout(() => window.removeEventListener("click", stop, true), 60);
+    const ids = blocks.map(b => b.id); if (go && at >= 0) { const f = ids.indexOf(n.id); ids.splice(f, 1); ids.splice(at > f ? at - 1 : at, 0, n.id); }
+    commitOrder(ids, row, from);
   };
-  const up = () => finish(true); const cancel = () => finish(false); const key = (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); finish(false); } };
+  const up = (ev) => finish(true, ev); const cancel = () => finish(false); const key = (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); finish(false); } };
   document.addEventListener("pointermove", move); document.addEventListener("pointerup", up); document.addEventListener("pointercancel", cancel); document.addEventListener("keydown", key, true);
 }
 // The right-click menu on the folder list.
@@ -615,6 +763,11 @@ function openCtx(e, id) {
   const unread = id === "all" ? S.unread : node.unread; const label = id === "all" ? "All articles" : node.label;
   const item = (act, text, fn, o = {}) => h("button", { role: "menuitem", class: "ctxitem", "data-act": act, disabled: o.off ? true : null, onclick: () => { closeCtx(); fn(); } }, h("span", {}, text), o.note ? h("small", {}, o.note) : null);
   const items = [item("mark-read", "Mark all read", () => markNodeRead(id), { off: !unread, note: unread ? String(unread) : "none unread" })];
+  const fid = node && node.type === "feed" ? Number(node.id.slice(5)) : null;
+  items.push(h("div", { class: "ctxsep", role: "separator" }));
+  if (id === "all") items.push(item("refresh-all", "Refresh every feed", () => refreshScope("all")));
+  else if (fid) items.push(item("feed-refresh", "Refresh now", () => feedAct.refresh(fid)), item("feed-rename", "Rename…", () => feedAct.rename(fid)), item("feed-move", "Move to folder…", () => feedAct.move(fid)), item("feed-delete", "Delete…", () => feedAct.remove(fid)));
+  else items.push(item("folder-refresh", "Refresh now", () => refreshScope(id)), item("folder-rename", "Rename folder…", () => folderRename(id)));
   if (isTopFolder(node)) items.push(h("div", { class: "ctxsep", role: "separator" }), item("move-up", "Move up", () => moveNode(id, "up"), { off: node.first }), item("move-down", "Move down", () => moveNode(id, "down"), { off: node.last }));
   const menu = h("div", { class: "ctxmenu", role: "menu", "aria-label": label, "data-from": id }, h("div", { class: "ctxhead" }, label), ...items);
   document.body.append(menu); const w = menu.offsetWidth, hh = menu.offsetHeight;
@@ -632,7 +785,7 @@ function keepSearchFocus(fn) {
 function renderChrome() {
   noteImport(S.status);
   const body = $app.querySelector(".body"); if (!body) return render();
-  keepSearchFocus(() => { $app.querySelector(".top")?.replaceWith(topBar()); const side = body.querySelector(".side"); if (side) side.replaceWith(sideBar()); body.dataset.side = U.side ? "on" : "off"; });
+  keepSearchFocus(() => { $app.querySelector(".top")?.replaceWith(topBar()); const side = body.querySelector(".side"); if (side) { const keep = side.scrollTop; const fresh = sideBar(); side.replaceWith(fresh); fresh.scrollTop = keep; } body.dataset.side = U.side ? "on" : "off"; });
 }
 // Apple fonts are built locally and may be absent. Until the probe answers (or where the browser cannot probe) a font counts as present.
 const fontOk = {};
@@ -684,16 +837,17 @@ function renderOverlay() {
 
 // ---------- main area ----------
 function render() {
-  const view = isFeedTab() ? feedMain() : S.tab === "stats" ? statsMain() : S.tab === "sync" ? syncMain() : settingsMain();
-  const body = h("div", { class: "body", "data-side": U.side ? "on" : "off" }, sideBar(), h("main", { class: "main" }, view));
-  keepSearchFocus(() => { $app.replaceChildren(topBar(), body); renderPop(); renderOverlay(); afterMain(); });
+  const view = tm("feedMain", () => isFeedTab() ? feedMain() : S.tab === "stats" ? statsMain() : S.tab === "sync" ? syncMain() : settingsMain());
+  const body = h("div", { class: "body", "data-side": U.side ? "on" : "off" }, tm("sideBar", sideBar), h("main", { class: "main" }, view));
+  keepSearchFocus(() => { tm("replaceChildren", () => $app.replaceChildren(topBar(), body)); renderPop(); renderOverlay(); tm("afterMain", afterMain); });
 }
 function renderMain() { const m = $app.querySelector(".main"); if (!m) return render(); m.replaceChildren(...(isFeedTab() ? feedMain() : S.tab === "stats" ? statsMain() : S.tab === "sync" ? syncMain() : settingsMain())); afterMain(); }
 function afterMain() {
   const sub = $app.querySelector(".sub"); const topH = 52 + (sub ? sub.getBoundingClientRect().height : 0);
-  document.documentElement.style.setProperty("--ghead-top", Math.round(topH) + "px");
+  // A custom property set on the root restyles every element, so it is written only when the value really changed.
+  const gh = Math.round(topH) + "px"; if (document.documentElement.style.getPropertyValue("--ghead-top") !== gh) document.documentElement.style.setProperty("--ghead-top", gh);
   if (S.openCard && S.rows.has(S.openCard)) { const r = S.rows.get(S.openCard); const el = rowElById(r.id); if (el) { el.dataset.card = "true"; fillCard(r); } }
-  showBanner(); observeRows(); anchorSamples();
+  showBanner(); observeRows(); anchorSamples(); kickFill();
 }
 
 // ---------- stats ----------
@@ -747,6 +901,23 @@ function areaGraph(points, label, unit) {
 const tile = (state, icn, title, big, sentence, foot, extra) => h("div", { class: "tile light", "data-state": state },
   h("div", { class: "thead" }, h("span", { class: "tico" }, icon(icn, 18)), h("b", {}, title), h("span", { class: "lamp " + state, title: STATE_WORD[state] })), big != null ? h("div", { class: "tbig" }, big) : null, h("p", { class: "tsent" }, sentence), extra || null, foot ? h("div", { class: "tfoot" }, foot) : null);
 
+// The Miniflux server tile: the version, whether its answers still look the way Pravaha expects, and a read-only self-check.
+const kb = (b) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(b < 10240 ? 1 : 0)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+async function ackServer() { try { S.status = await send({ type: "serverAck" }); } catch { return; } renderMain(); renderChrome(); toast("Noted. The server change is acknowledged.", { kind: "success" }); }
+async function checkServer() {
+  if (S.serverBusy) return; S.serverBusy = true; S.serverLines = null; renderMain();
+  try { const r = await send({ type: "serverCheck" }); S.serverLines = r.lines; S.status = r.status; } catch { S.serverLines = [{ state: "red", text: "The check could not run. The background page did not answer." }]; }
+  S.serverBusy = false; renderMain(); renderChrome();
+}
+function serverTile() {
+  const st = S.status; const x = st && st.lights.find(l => l.id === "server"); if (!x) return null; const sv = st.server || {};
+  const how = sv.mode === "light" ? "light refresh" : sv.mode === "full" ? "full refresh" : null;
+  const foot = how ? `Last refresh: ${how}, ${sv.calls} request${sv.calls === 1 ? "" : "s"}, ${kb(sv.bytes || 0)}` : null;
+  const lines = S.serverLines ? h("ul", { class: "checks", "data-checks": "1", "aria-label": "Server check results" }, S.serverLines.map(l => h("li", { "data-state": l.state }, h("span", { class: "lamp " + l.state }), h("span", {}, l.text)))) : null;
+  const acts = h("div", { class: "tacts" }, sv.changed ? h("button", { class: "btn small primary", "data-act": "server-ack", onclick: ackServer }, "Got it") : null,
+    h("button", { class: "btn small", "data-act": "server-check", disabled: S.serverBusy ? true : null, onclick: checkServer }, S.serverBusy ? "Checking" : "Check server"));
+  return tile(x.state, "gauge", "Miniflux server", sv.version || "unknown", x.sentence, foot, h("div", {}, acts, lines));
+}
 function syncMain() {
   const st = S.status; if (!st) return [h("div", { class: "empty" }, "Loading")]; const l = st.left || {}; const machines = Array.isArray(l.machines) ? l.machines : [];
   const lightOf = (id) => st.lights.find(x => x.id === id); const n = (l.events || 0) + (l.ops || 0);
@@ -767,7 +938,7 @@ function syncMain() {
     body = [h("div", { class: "hero dash", "data-state": st.overall }, ring(frac, st.overall, st.overall === "green" ? icon("check", 40) : h("span", { class: "rnum" }, String(n)), false, headline),
       h("div", { class: "herotext" }, h("p", { class: "eyebrow" }, "Sync status"), h("h2", {}, headline), h("p", {}, sub), st.activity ? h("p", { class: "note" }, `${st.activity.label}${st.activity.total ? `: ${Math.min(st.activity.done, st.activity.total)} of ${st.activity.total}` : ""}`) : null,
         h("div", { class: "heroact" }, h("button", { class: "btn primary", onclick: syncNow }, icon("sync", 15), S.busy ? "Syncing" : "Sync now"), h("button", { class: "btn", onclick: async () => { const r = await send({ type: "digest" }); toast(r.sentence); } }, "Write digest now")))),
-      h("div", { class: "tiles" }, svc("miniflux", "rss", "Miniflux"), svc("webdav", "layers", "WebDAV storage"), svc("log", "clock", "Reading history"), svc("raindrop", "bookmark", "Raindrop"), svc("feeds", "list", "Feeds"),
+      h("div", { class: "tiles" }, svc("miniflux", "rss", "Miniflux"), serverTile(), svc("webdav", "layers", "WebDAV storage"), svc("log", "clock", "Reading history"), svc("raindrop", "bookmark", "Raindrop"), svc("feeds", "list", "Feeds"),
         tile(fxState, "sync", "Firefox Sync", null, !fx ? "Reading Firefox Sync." : fx.error ? fx.error : fx.parts.map(p => fxLine(p)[1]).slice(0, 1).join(""), null, h("div", { class: "fxbar", role: "img", "aria-label": "The four parts Firefox Sync carries" }, (fx ? fx.parts : [{}, {}, {}, {}]).map(p => h("i", { "data-s": p.part ? fxLine(p)[0] : "off", title: p.part ? FX_NAMES[p.part] : "" }))))),
       h("div", { class: "graphs" }, h("div", { class: "gcard" }, h("div", { class: "gtitle2" }, h("b", {}, "Changes waiting"), h("span", {}, n ? `${n} now` : "none now")), areaGraph(hist.map(p => p.pending), "Changes waiting to sync over time", "changes")),
         h("div", { class: "gcard" }, h("div", { class: "gtitle2" }, h("b", {}, "History on the storage"), h("span", {}, `${total.toLocaleString()} events`)),
@@ -863,13 +1034,15 @@ function settingsMain() {
       h("div", { class: "sample prose" }, h("p", { "data-sample": "Reading is a daily discipline. A comfortable measure, a generous line gap and a calm serif let a long article carry you along without effort." }, "Reading is a daily discipline. A comfortable measure, a generous line gap and a calm serif let a long article carry you along without effort."), h("p", { "data-sample": "Changes apply instantly and stay on this machine." }, "Changes apply instantly and stay on this machine.")))];
   else if (tab === "ranking") content = [h("div", { class: "panel" }, h("h2", {}, "Relevance weights"), ...[["tag", "Tag match"], ["echo", "Sites you read"], ["authority", "Feed standing"], ["freshness", "Freshness"]].map(([k, l]) => { const out = h("span", {}, pct(d.weights[k])); return h("label", { class: "range" }, h("span", {}, l), h("input", { type: "range", min: 0, max: 1, step: 0.05, value: d.weights[k], oninput: (e) => { d.weights[k] = Number(e.target.value); out.textContent = pct(d.weights[k]); markDirty(); } }), out); }),
     h("p", { class: "note" }, "Only the proportions matter. They are rescaled to add up to one when saved."), chk("Boost feeds I have not opened this session", d, "novelty"))];
+  else if (tab === "feeds") content = feedsMain();
   else if (tab === "move") content = moveMain();
   else if (tab === "machine") content = [h("div", { class: "panel" }, h("h2", {}, "This machine"), h("div", { class: "grid2" }, inp("Machine name (set once, keep it)", d, "device"), inp("Check for new articles every (minutes)", d, "pollMinutes", "number"), inp("Keep read articles for (days)", d, "retentionDays", "number")), chk("Write the weekly digest automatically", d, "autoDigest")), detectPanel()];
   else content = [h("div", { class: "panel" }, h("h2", {}, "Keyboard shortcuts"), h("div", { class: "keys" }, SHORTCUTS.map(([k, v]) => h("div", {}, h("span", {}, v), h("kbd", {}, k)))))];
   const needSave = tab === "connections" || tab === "ranking" || tab === "machine";
   const connLamp = S.status ? worstOf(S.status.lights.filter(x => x.id === "miniflux" || x.id === "webdav").map(x => x.state)) : "off";
+  const feedsLamp = S.status ? ((S.status.lights.find(x => x.id === "feeds") || {}).state || null) : null;
   const fxl = S.fx ? (S.fx.error || !S.fx.readable ? "red" : worstOf(S.fx.parts.map(p => fxLine(p)[0]))) : null;
-  const tabs = folderTabs([{ id: "connections", label: "Connections", icon: "link", lamp: connLamp }, { id: "look", label: "Look and reading", icon: "palette" }, { id: "ranking", label: "Ranking", icon: "sliders" }, { id: "move", label: "Move setup", icon: "swap", lamp: fxl }, { id: "machine", label: "This machine", icon: "laptop", lamp: S.detect ? (S.detect.on ? "green" : "off") : null }, { id: "keys", label: "Shortcuts", icon: "keyboard" }], S.stab, (id) => { S.stab = id; renderMain(); }, "Settings sections");
+  const tabs = folderTabs([{ id: "connections", label: "Connections", icon: "link", lamp: connLamp }, { id: "look", label: "Look and reading", icon: "palette" }, { id: "feeds", label: "Feeds", icon: "rss", lamp: feedsLamp }, { id: "ranking", label: "Ranking", icon: "sliders" }, { id: "move", label: "Move setup", icon: "swap", lamp: fxl }, { id: "machine", label: "This machine", icon: "laptop", lamp: S.detect ? (S.detect.on ? "green" : "off") : null }, { id: "keys", label: "Shortcuts", icon: "keyboard" }], S.stab, (id) => { S.stab = id; renderMain(); }, "Settings sections");
   return [h("div", { class: "page" }, pageHead("Settings", "Connections, the way it looks, and how this machine behaves."),
     S.settings && !S.settings.miniflux.token ? setupHero() : null, tabs,
     sheet(tab, ...content, needSave ? h("div", { class: "savebar" }, h("button", { class: "btn primary", "data-save": "1", disabled: S.dirty ? null : true, onclick: saveDraft }, "Save and test"), h("button", { class: "btn", "data-gofeed": "1", hidden: !(S.settings && S.settings.miniflux.token), onclick: () => go("feed") }, "Open Newsfeed"), h("span", { class: "note" }, S.dirty ? "You have unsaved changes." : "Nothing to save.")) : null))];
@@ -954,6 +1127,85 @@ function moveMain() { return [fxCard(), filePanel()]; }
 
 // ---------- add a feed ----------
 // Miniflux's own server looks at the page and lists its feeds; this extension never contacts the site itself.
+// ---------- feed management ----------
+// Every change is made in Miniflux first and only then shown here, so this page never claims something that Miniflux did not accept.
+const FEED_PAGE = 100;
+const folderPaths = () => S.tree.filter(n => n.type === "folder").map(n => n.id.slice(4)).sort((a, b) => a.localeCompare(b));
+const catOf = (fid) => { const n = S.tree.find(x => x.id === "feed:" + fid); return n && n.parent ? n.parent.slice(4) : ""; };
+const feedTitle = (fid) => { const n = S.tree.find(x => x.id === "feed:" + fid); if (n) return n.label; const f = (S.feedsInfo || []).find(x => x.id === fid); return f ? f.title : "this feed"; };
+async function loadFeedsInfo() {
+  try { S.feedsInfo = await send({ type: "feedsInfo" }); } catch { S.feedsInfo = S.feedsInfo || []; }
+  if (S.tab === "settings" && S.stab === "feeds") fillFeedList();
+}
+// After a rename the folder's id changes, so anything the page remembers by id follows it.
+function followId(from, to) {
+  const re = (id) => id === from || id.startsWith(from + "/") ? to + id.slice(from.length) : id;
+  S.treeCollapsed = new Set([...S.treeCollapsed].map(re)); lsSet("pravaha.treeCollapsed", [...S.treeCollapsed]); S.scope = re(S.scope);
+}
+async function manage(msg, after) {
+  let r; try { r = await send(msg); } catch { return null; }
+  if (r.tree) S.tree = r.tree;
+  toast(r.sentence, { kind: r.ok ? (r.unchanged ? "info" : "success") : "error" });
+  if (r.ok && after) after(r);
+  if (isFeedTab()) { if (r.ok && !msg.type.startsWith("refresh")) loadView(); else renderChrome(); } else { renderChrome(); if (S.tab === "settings" && S.stab === "feeds") loadFeedsInfo(); }
+  return r;
+}
+const feedAct = {
+  async refresh(fid) { return manage({ type: "refreshScope", scope: "feed:" + fid }); },
+  async rename(fid) {
+    const cur = feedTitle(fid); const v = await askForm({ title: "Rename feed", body: "The new name is saved in Miniflux, so every machine and every app sees it.", label: "Name", value: cur, confirmLabel: "Rename" });
+    if (typeof v !== "string" || !v.trim() || v.trim() === cur) return null; return manage({ type: "feedUpdate", id: fid, patch: { title: v } });
+  },
+  async move(fid) {
+    const cur = catOf(fid) || (S.feedsInfo || []).find(x => x.id === fid)?.category || ""; const list = folderPaths(); if (cur && !list.includes(cur)) list.push(cur);
+    const v = await askForm({ title: "Move feed", body: `Choose the folder for “${feedTitle(fid)}”. Folders are Miniflux categories; a folder inside another is written Parent/Child.`, kind: "folder", label: "Folder", options: list, value: cur, confirmLabel: "Move" });
+    if (typeof v !== "string" || !v.trim() || v.trim() === cur) return null; return manage({ type: "feedUpdate", id: fid, patch: { category: v } });
+  },
+  async toggle(fid, disabled) { return manage({ type: "feedUpdate", id: fid, patch: { disabled: !disabled } }); },
+  async remove(fid) {
+    const t = feedTitle(fid); const info = (S.feedsInfo || []).find(x => x.id === fid);
+    const v = await askForm({ title: "Delete this feed?", body: [`This deletes “${t}” and all of its articles from Miniflux. It cannot be undone.`, "If you only want it to stop being fetched, disable it instead. To delete, type the feed’s name exactly."], kind: "typed", expect: t, label: "Type the name to confirm", confirmLabel: "Delete feed", danger: true, alt: info && info.disabled ? null : "Disable instead" });
+    if (v && v.alt) return feedAct.toggle(fid, false);
+    if (typeof v !== "string") return null;
+    return manage({ type: "feedDelete", id: fid, confirm: v }, () => { if (S.scope === "feed:" + fid) S.scope = "all"; });
+  }
+};
+async function folderRename(id) {
+  const path = id.slice(4); const leaf = path.split("/").pop(); const kids = S.tree.filter(n => n.type === "folder" && n.id.startsWith(id + "/")).length;
+  const v = await askForm({ title: "Rename folder", body: kids ? `This also renames the ${kids} folder${kids === 1 ? "" : "s"} inside it, in Miniflux, one at a time.` : "The folder is renamed in Miniflux, so every machine and every app sees it.", label: "Name", value: leaf, confirmLabel: "Rename" });
+  if (typeof v !== "string" || !v.trim() || v.trim() === leaf) return null;
+  return manage({ type: "folderRename", path, to: v }, (r) => { if (r.map) followId(r.map.from, r.map.to); });
+}
+const refreshScope = (scope) => manage({ type: "refreshScope", scope });
+
+// The Feeds tab: every feed with its health, a filter, and the same actions as the right-click menu.
+const feedMatches = (f, q, prob) => (!prob || f.state !== "green" || f.disabled) && (!q || (f.title + " " + f.category).toLowerCase().includes(q));
+function feedRow(f) {
+  const btn = (act, text, fn) => h("button", { class: "btn small", "data-act": act, onclick: fn }, text);
+  const note = f.disabled ? "Disabled: Miniflux is not fetching this feed." : f.state !== "green" ? (f.errorText || f.sentence) : "";
+  return h("div", { class: "frow", "data-feed": String(f.id), "data-state": f.disabled ? "off" : f.state },
+    h("span", { class: "lamp " + (f.disabled ? "off" : f.state), title: f.disabled ? "Disabled" : STATE_WORD[f.state] }),
+    h("div", { class: "fmain" }, h("b", { class: "ftitle" }, f.title), h("span", { class: "fcat" }, f.category), note ? h("span", { class: "fnote" }, note) : null),
+    h("div", { class: "tacts" }, btn("feed-refresh", "Refresh", () => feedAct.refresh(f.id)), btn("feed-rename", "Rename", () => feedAct.rename(f.id)), btn("feed-move", "Move", () => feedAct.move(f.id)),
+      btn("feed-toggle", f.disabled ? "Enable" : "Disable", () => feedAct.toggle(f.id, f.disabled)), h("button", { class: "btn small danger", "data-act": "feed-delete", onclick: () => feedAct.remove(f.id) }, "Delete")));
+}
+function fillFeedList() {
+  const box = $app.querySelector("[data-flist]"); if (!box) return; const all = S.feedsInfo; const sum = $app.querySelector("[data-fsum]");
+  if (!all) { box.replaceChildren(h("p", { class: "note" }, "Reading your feeds.")); return; }
+  const q = (S.fq || "").trim().toLowerCase(); const list = all.filter(f => feedMatches(f, q, S.fprob)).sort((a, b) => (a.category + "\u0001" + a.title).localeCompare(b.category + "\u0001" + b.title));
+  const shown = list.slice(0, S.fpage * FEED_PAGE);
+  box.replaceChildren(...(shown.length ? shown.map(feedRow) : [h("p", { class: "note" }, all.length ? "No feed matches." : "No feeds yet. Add one with the plus button in the sidebar.")]),
+    list.length > shown.length ? h("button", { class: "btn", "data-act": "feeds-more", onclick: () => { S.fpage++; fillFeedList(); } }, `Show ${Math.min(FEED_PAGE, list.length - shown.length)} more`) : null);
+  if (sum) { const bad = all.filter(f => f.state !== "green" || f.disabled).length; sum.textContent = `${all.length} feed${all.length === 1 ? "" : "s"}${bad ? `, ${bad} with trouble or disabled` : ""}`; }
+}
+function feedsMain() {
+  loadFeedsInfo(); if (S.feedsInfo) queueMicrotask(fillFeedList);
+  return [h("div", { class: "feedbar" },
+    h("input", { type: "search", class: "fq", "data-field": "feed-filter", placeholder: "Filter by name or folder", "aria-label": "Filter feeds", value: S.fq || "", oninput: (e) => { S.fq = e.target.value; S.fpage = 1; fillFeedList(); } }),
+    h("label", { class: "chk" }, h("input", { type: "checkbox", "data-field": "feed-problems", checked: S.fprob, onchange: (e) => { S.fprob = e.target.checked; S.fpage = 1; fillFeedList(); } }), "Only feeds with trouble"),
+    h("button", { class: "btn small", "data-act": "refresh-all", onclick: () => refreshScope("all") }, "Refresh every feed")),
+    h("p", { class: "note", "data-fsum": "1" }, ""), h("div", { class: "flist", "data-flist": "1" }, h("p", { class: "note" }, "Reading your feeds."))];
+}
 function openAddFeed(prefill = "") {
   if (!S.settings || !S.settings.miniflux.token) return toast("Connect Miniflux in Settings first.", { kind: "warn" });
   const st = { found: null, pick: null, cats: null, busy: false, folderFromScope: "" };
@@ -1007,7 +1259,8 @@ window.addEventListener("hashchange", handleHash);
 
 // ---------- keyboard ----------
 function selectOffset(d, openIt) {
-  const els = rowEls(); if (!els.length) return; let i = els.findIndex(e => Number(e.dataset.id) === S.selId); i = i < 0 ? (d > 0 ? 0 : els.length - 1) : Math.min(els.length - 1, Math.max(0, i + d));
+  let els = rowEls(); if (S.data && d > 0 && els.length && Number(els[els.length - 1].dataset.id) === S.selId) { const nx = S.data.groups.find(g => g.pending && !isCollapsed(g.key)); if (nx) { fillNow(nx); els = rowEls(); } }
+  if (!els.length) return; let i = els.findIndex(e => Number(e.dataset.id) === S.selId); i = i < 0 ? (d > 0 ? 0 : els.length - 1) : Math.min(els.length - 1, Math.max(0, i + d));
   const id = Number(els[i].dataset.id); selectRow(id); els[i].scrollIntoView({ block: "nearest", behavior: "smooth" });
   if (openIt && S.rows.get(id)) openCardFor(S.rows.get(id));
 }

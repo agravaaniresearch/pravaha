@@ -32,3 +32,27 @@ One reader marks 240 articles read in one action while requests fail at the stat
 - A trial with leftovers means that after recovery some article the reader had marked read was still unread on Miniflux.
 - "Said confirmed while some were unread" must be zero: the reader never reports a confirmation it did not get.
 - The fake imitates one failure mode. Real Miniflux may fail in other ways, which is why the reader asks Miniflux afterwards instead of trusting its own request.
+
+## Light refresh and feed management (0.6.0)
+
+**Light refresh.** One reader holds 200 unread articles. While it refreshes, 15 more arrive and 10 are read in another app, and requests fail at the stated rate. After the network recovers the reader's unread list must equal Miniflux's. The second block makes Miniflux answer the entry-number call in a shape Pravaha does not know, as a silent server update could; the reader must fall back to the full download, stay correct, and not turn the server light red for a harmless change.
+
+| Case | Request failure rate | Reader differs from Miniflux after recovery | Unhandled errors | Last refresh was the light kind | Server light red |
+|---|---|---|---|---|---|
+| Normal server | 0% | 0.0% | 0.0% | 100.0% | 0.0% |
+| Normal server | 5% | 0.0% | 0.0% | 100.0% | 0.0% |
+| Normal server | 20% | 0.0% | 0.0% | 100.0% | 0.0% |
+| Normal server | 50% | 0.0% | 0.0% | 100.0% | 0.0% |
+| Unknown answer shape | 0% | 0.0% | 0.0% | 0.0% | 0.0% |
+
+**Renaming a folder.** A folder with two subfolders is three Miniflux categories, renamed one call at a time, so a failure part-way leaves some renamed. "Not renamed, no explanation" and "said it succeeded while Miniflux disagrees" must both be zero.
+
+| Request failure rate | All three renamed | Partly renamed and the reader said so | Not renamed, no explanation | Said it succeeded while Miniflux disagrees | View differs from Miniflux after recovery | Unhandled errors |
+|---|---|---|---|---|---|---|
+| 0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% |
+| 5% | 87.0% | 13.0% | 0.0% | 0.0% | 0.0% | 0.0% |
+| 20% | 33.0% | 67.0% | 0.0% | 0.0% | 0.0% | 0.0% |
+| 50% | 6.0% | 94.0% | 0.0% | 0.0% | 0.0% | 0.0% |
+
+- 100 trials per light-refresh row and 100 per rename row, seeded.
+- The fakes imitate the documented Miniflux behaviour. They do not prove that the live server behaves the same way; the Check server button on the Sync page is how that is found out.

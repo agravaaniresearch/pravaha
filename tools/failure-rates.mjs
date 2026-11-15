@@ -86,10 +86,69 @@ for (const p of RATES) {
 const bulkTable = "| Request failure rate | 0.2.3 behaviour: trials with articles left unread | Avg left | Second try only: trials | Avg left | 0.3.0: trials | Avg left | 0.3.0 unhandled errors | 0.3.0 said \"confirmed\" while some were unread |\n|---|---|---|---|---|---|---|---|---|\n" +
   bulkRows.map(x => `| ${Math.round(x.p * 100)}% | ${x.a.any} | ${x.a.avg} | ${x.b.any} | ${x.b.avg} | ${x.c.any} | ${x.c.avg} | ${x.c.crash} | ${x.c.lie} |`).join("\n");
 console.log("\n" + bulkTable);
+
+// ---------- light refresh and feed management (0.6.0) ----------
+// A: one reader holds 200 unread articles. Meanwhile 15 arrive, and 10 are read in another app. The refresh runs while requests fail at the stated rate,
+//    then the network recovers. "Diverged" means the reader's unread list still differs from Miniflux afterwards. "drift" makes Miniflux answer the
+//    entry-number call in a shape Pravaha does not know (what a silent server update could do); the reader must fall back and still be right.
+async function lightTrial(seed, p, drift) {
+  const r = rng(seed); const ctl = { p: 0 };
+  const chaos = () => { if (ctl.p === 0) return null; const x = r(); return x < ctl.p * 0.6 ? "throw" : x < ctl.p ? 500 : null; };
+  const dav = makeDav(), mf = makeMiniflux({ faults: chaos }), rd = makeRaindrop({ bookmarks: [] });
+  mf.st.feeds = [feed(1, "A", "X/Y"), feed(2, "B", "Z"), feed(3, "C", "Z")];
+  for (let i = 1; i <= 200; i++) { const e = entry(i, 1 + (i % 3), `Story ${i}`, "body " + i, i / 10); e.feed = { id: e.feed_id, title: "F", category: { title: "X" } }; mf.st.entries.push(e); }
+  const fetchImpl = router({ dav, mf, rd }); const st = new MemoryStorage(); await st.set({ settings: settings("laptop", { raindrop: { token: "" } }) });
+  const e = new Engine({ storage: st, fetchImpl }); await e.load(); await e.syncNow();
+  for (let i = 201; i <= 215; i++) { const x = entry(i, 1 + (i % 3), `Story ${i}`, "body " + i, 0.1); x.feed = { id: x.feed_id, title: "F", category: { title: "X" } }; mf.st.entries.push(x); }
+  for (let i = 1; i <= 10; i++) mf.st.entries.find(x => x.id === i * 7).status = "read";
+  if (drift) mf.st.badIds = true; ctl.p = p; let crashed = false;
+  try { await e.syncNow(); } catch { crashed = true; }
+  ctl.p = 0; let mode = null; for (let i = 0; i < 4; i++) { try { await e.syncNow(); } catch { crashed = true; } mode = e.net.miniflux && e.net.miniflux.mode; }
+  const mine = new Set(Object.values(e.cache.items).filter(x => x.status === "unread").map(x => x.id)); const theirs = new Set(mf.st.entries.filter(x => x.status === "unread").map(x => x.id));
+  const same = mine.size === theirs.size && [...mine].every(id => theirs.has(id));
+  return { diverged: !same, crashed, mode, red: (e.status().lights.find(l => l.id === "server") || {}).state === "red" };
+}
+const lightRows = []; const NL = Math.min(TRIALS, 100);
+for (const [label, drift, ps] of [["Normal server", false, RATES], ["Unknown answer shape", true, [0]]]) for (const p of ps) {
+  let div = 0, crash = 0, light = 0, red = 0;
+  for (let i = 0; i < NL; i++) { const t = await lightTrial(7000 + i * 17 + Math.round(p * 100) + (drift ? 3 : 0), p, drift); div += t.diverged; crash += t.crashed; light += t.mode === "light"; red += t.red; }
+  lightRows.push({ label, p, div: (100 * div / NL).toFixed(1) + "%", crash: (100 * crash / NL).toFixed(1) + "%", light: (100 * light / NL).toFixed(1) + "%", red: (100 * red / NL).toFixed(1) + "%" });
+}
+const lightTable = "| Case | Request failure rate | Reader differs from Miniflux after recovery | Unhandled errors | Last refresh was the light kind | Server light red |\n|---|---|---|---|---|---|\n" +
+  lightRows.map(x => `| ${x.label} | ${Math.round(x.p * 100)}% | ${x.div} | ${x.crash} | ${x.light} | ${x.red} |`).join("\n");
+console.log("\n" + lightTable);
+
+// B: rename a folder that holds two subfolders (three Miniflux categories, renamed one call at a time) while requests fail at the stated rate.
+//    Complete means all three were renamed. Reported partial means some were not and the reader said so. "Wrong claim" means the reader said it succeeded while Miniflux disagrees.
+//    "View differs" means that after recovery the reader's folders do not match Miniflux's.
+async function renameTrial(seed, p) {
+  const r = rng(seed); const ctl = { p: 0 };
+  const chaos = () => { if (ctl.p === 0) return null; const x = r(); return x < ctl.p * 0.6 ? "throw" : x < ctl.p ? 500 : null; };
+  const dav = makeDav(), mf = makeMiniflux({ faults: chaos }), rd = makeRaindrop({ bookmarks: [] });
+  mf.st.feeds = [feed(1, "A", "Top"), feed(2, "B", "Top/Sub1"), feed(3, "C", "Top/Sub2"), feed(4, "D", "Other")];
+  for (let i = 1; i <= 8; i++) { const e = entry(i, 1 + (i % 4), `Story ${i}`, "body " + i, i); e.feed = { id: e.feed_id, title: "F", category: { title: "X" } }; mf.st.entries.push(e); }
+  const fetchImpl = router({ dav, mf, rd }); const st = new MemoryStorage(); await st.set({ settings: settings("laptop", { raindrop: { token: "" } }) });
+  const e = new Engine({ storage: st, fetchImpl }); await e.load(); await e.syncNow(); ctl.p = p; let res = null, crashed = false;
+  try { res = await e.folderRename("Top", "Main"); } catch { crashed = true; }
+  ctl.p = 0; for (let i = 0; i < 3; i++) { try { await e.syncNow(); } catch { crashed = true; } }
+  const server = mf.st.feeds.map(f => f.category.title).sort().join("|"); const mine = e.cache.feeds.map(f => f.category).sort().join("|");
+  const done = server === ["Main", "Main/Sub1", "Main/Sub2", "Other"].sort().join("|");
+  return { complete: done, partialReported: !done && !!res && !res.ok && /already renamed|Nothing was renamed|already exists/.test(res.sentence), wrong: !!(res && res.ok && !done), differs: server !== mine, crashed };
+}
+const renRows = []; const NR = Math.min(TRIALS, 100);
+for (const p of RATES) {
+  let c = 0, pr = 0, w = 0, d = 0, cr = 0;
+  for (let i = 0; i < NR; i++) { const t = await renameTrial(9000 + i * 13 + Math.round(p * 100), p); c += t.complete; pr += t.partialReported; w += t.wrong; d += t.differs; cr += t.crashed; }
+  const f = (n) => (100 * n / NR).toFixed(1) + "%"; renRows.push({ p, c: f(c), pr: f(pr), unexplained: f(NR - c - pr > 0 ? (NR * 0 + (NR - c - pr)) : 0), w: f(w), d: f(d), cr: f(cr) });
+}
+const renTable = "| Request failure rate | All three renamed | Partly renamed and the reader said so | Not renamed, no explanation | Said it succeeded while Miniflux disagrees | View differs from Miniflux after recovery | Unhandled errors |\n|---|---|---|---|---|---|---|\n" +
+  renRows.map(x => `| ${Math.round(x.p * 100)}% | ${x.c} | ${x.pr} | ${x.unexplained} | ${x.w} | ${x.d} | ${x.cr} |`).join("\n");
+console.log("\n" + renTable);
 const head = "| Request failure rate | Converged | Same state on both | Trials with a lost read | Stars correct | Lights all green | Trials with an unhandled error | Avg recovery passes | Worst |\n|---|---|---|---|---|---|---|---|---|";
 const table = head + "\n" + rows.map(x => `| ${Math.round(x.p * 100)}% | ${x.converged} | ${x.stateEqual} | ${x.lost} | ${x.stars} | ${x.green} | ${x.crash} | ${x.avg} | ${x.worst} |`).join("\n");
 console.log(table);
 if (process.argv.includes("--write")) {
   writeFileSync(new URL("../docs/FAILURE_RATES.md", import.meta.url), `# Failure rates\n\nGenerated by \`node tools/failure-rates.mjs ${TRIALS} --write\`. Seeded, so a re-run gives the same numbers.\n\nEach trial runs two machines for 40 random actions (sync, mark read, open, dismiss, save, train, dwell) against fake Miniflux, WebDAV and Raindrop servers. During the actions, each request fails at the stated rate (60% as a dropped connection, 40% as a server error). Then the network recovers and both machines sync up to six passes. ${TRIALS} trials per row.\n\n${table}\n\n## How to read this\n\n- **Converged** means both machines hold the same events and nothing is waiting to be sent.\n- **Lost read** means an article the reader marked read never reached Miniflux after recovery.\n- **Unhandled error** means an action threw instead of queueing. It should be zero at every rate.\n- This measures the reader's own queueing and merging logic. It does not measure real Miniflux, Fastmail or Raindrop behaviour, which these fakes only imitate.\n`);
   appendFileSync(new URL("../docs/FAILURE_RATES.md", import.meta.url), `\n## Marking many articles read (0.3.0)\n\nOne reader marks 240 articles read in one action while requests fail at the stated rate, and the fake Miniflux silently ignores about 8% of the ids it is sent, which is the failure behind "some of the unread articles remain". After the network recovers there are six sync passes, then the count of articles still unread on Miniflux is taken. The first variant imitates 0.2.3: whatever Miniflux reports afterwards wins and nothing is sent again. The second only sends again on the next refresh. The third is 0.3.0: it asks Miniflux straight after the bulk mark, sends again what did not stick, and also sends again on later refreshes. ${Math.min(TRIALS, 100)} trials per row.\n\n${bulkTable}\n\n- A trial with leftovers means that after recovery some article the reader had marked read was still unread on Miniflux.\n- "Said confirmed while some were unread" must be zero: the reader never reports a confirmation it did not get.\n- The fake imitates one failure mode. Real Miniflux may fail in other ways, which is why the reader asks Miniflux afterwards instead of trusting its own request.\n`);
+  appendFileSync(new URL("../docs/FAILURE_RATES.md", import.meta.url), `\n## Light refresh and feed management (0.6.0)\n\n**Light refresh.** One reader holds 200 unread articles. While it refreshes, 15 more arrive and 10 are read in another app, and requests fail at the stated rate. After the network recovers the reader's unread list must equal Miniflux's. The second block makes Miniflux answer the entry-number call in a shape Pravaha does not know, as a silent server update could; the reader must fall back to the full download, stay correct, and not turn the server light red for a harmless change.\n\n${lightTable}\n\n**Renaming a folder.** A folder with two subfolders is three Miniflux categories, renamed one call at a time, so a failure part-way leaves some renamed. "Not renamed, no explanation" and "said it succeeded while Miniflux disagrees" must both be zero.\n\n${renTable}\n\n- ${NL} trials per light-refresh row and ${NR} per rename row, seeded.\n- The fakes imitate the documented Miniflux behaviour. They do not prove that the live server behaves the same way; the Check server button on the Sync page is how that is found out.\n`);
 }

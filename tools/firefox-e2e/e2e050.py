@@ -23,13 +23,13 @@ ext = build_ext("/tmp/pv-ext")
 for W, Hh in ((2370, 1030), (1360, 900)):
     A = Browser("A", ext, width=W, height=Hh, prefs={"extensions.webextOptionalPermissionPrompts": False})
     try:
-        A.open(); A.send({"type": "saveSettings", "patch": {"device": "laptop", "miniflux": MF, "webdav": DAV}}); A.send({"type": "syncNow"}); time.sleep(1); A.open(); time.sleep(1)
+        A.open(); A.send({"type": "saveSettings", "patch": {"device": f"laptop{W}", "miniflux": MF, "webdav": DAV}}); A.send({"type": "syncNow"}); time.sleep(1); A.open(); time.sleep(1)
         before = A.js(labels); print(W, "folders before:", before[:3])
         top = [e for e in A.d.find_elements(By.CSS_SELECTOR, ".side .trow[data-grab='true'] .tbtn")]
         check(f"{W}: top-level folders have a grab cursor", all(e.value_of_css_property("cursor") == "grab" for e in top), [e.value_of_css_property("cursor") for e in top])
         food = [e for e in top if "Food" in e.text][0]; defence = [e for e in top if "Defence" in e.text][0]
         ac = ActionChains(A.d); ac.move_to_element(food).click_and_hold().move_by_offset(0, -20).move_by_offset(0, -30).move_to_element_with_offset(defence, 20, 2).pause(0.3).perform()
-        cur = A.js("return getComputedStyle(document.body).cursor + '|' + document.body.classList.contains('dragging-folder') + '|' + !!document.querySelector('.dropline')")
+        cur = A.js("return (document.querySelector('.dragshield') ? getComputedStyle(document.querySelector('.dragshield')).cursor : 'none') + '|' + document.body.classList.contains('dragging-folder') + '|' + !!document.querySelector('.dropline')")
         check(f"{W}: while dragging the cursor is a closed hand and a drop line shows", cur.startswith("grabbing|true|true"), cur)
         A.shot(f"{OUT}/drag-{W}.png"); ActionChains(A.d).release().perform(); time.sleep(1)
         after = A.js(labels); check(f"{W}: dropping Food above Defence reorders the sidebar", after[0] == "Food", after)

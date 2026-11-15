@@ -29,7 +29,7 @@ test("a report from a tab colours that tab's icon, sets a badge, title and popup
   assert.equal(by.icon.tabId, 7); assert.match(by.icon.path[32], /icon-feed-32/); assert.equal(by.badge.text, "2"); assert.match(by.title.title, /Subscribe with Pravaha \(2 feeds/); assert.equal(by.popup.popup, "ui/popup.html");
   assert.equal((await d.get(7)).length, 2); assert.deepEqual(await d.get(8), []);
   api.calls.length = 0; await d.clear(7); assert.deepEqual(await d.get(7), []); const c = Object.fromEntries(api.calls.map(([n, a]) => [n, a]));
-  assert.equal(c.icon.path, null); assert.equal(c.badge.text, ""); assert.equal(c.popup.popup, null); api.calls.length = 0; await d.clear(7); assert.equal(api.calls.length, 0, "clearing a tab with nothing does nothing");
+  assert.equal(c.icon.path, null); assert.equal(c.badge.text, null, "a cleared tab falls back to the toolbar-wide badge"); assert.equal(c.popup.popup, null); api.calls.length = 0; await d.clear(7); assert.equal(api.calls.length, 0, "clearing a tab with nothing does nothing");
   const one = await d.found({ id: "pravaha@agravaani", tab: tab(9) }, { feeds: [{ url: "https://s.example/rss", type: "rss" }] }); assert.equal(one.count, 1); assert.match(api.calls.find(c => c[0] === "title")[1].title, /\(1 feed found/);
 });
 test("reports from anything but this extension's own tab script are ignored", async () => {
@@ -81,7 +81,7 @@ test("the page script notices a feed link added after the page loaded, once", as
 });
 test("the manifest asks for no all-sites permission up front, and the right-click item is named Subscribe with Pravaha", () => {
   const m = JSON.parse(fs.readFileSync(new URL("../extension/manifest.json", import.meta.url), "utf8")); const bg = fs.readFileSync(new URL("../extension/background.js", import.meta.url), "utf8");
-  assert.equal(m.version, "0.5.0"); assert.equal(JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version, "0.5.0");
+  assert.equal(m.version, "0.6.0"); assert.equal(JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version, m.version);
   assert.ok(m.permissions.includes("scripting")); assert.ok(m.host_permissions.every(h => !/\*:\/\/\*|https:\/\/\*\/|http:\/\/\*\//.test(h)), "no all-sites host permission at install");
   assert.deepEqual(m.optional_host_permissions, ["https://*/*", "http://*/*"]); assert.equal(m.content_scripts, undefined, "no content script is declared up front");
   assert.match(bg, /title: "Subscribe with Pravaha"/); assert.doesNotMatch(bg, /Find feeds here/);

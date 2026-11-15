@@ -7,10 +7,10 @@ export function splitCategory(title) { return String(title || "Uncategorised").s
 export class Miniflux {
   constructor({ baseUrl, token, fetchImpl }) {
     this.base = String(baseUrl || "").replace(/\/+$/, "");
-    this.token = token; this.fetch = fetchImpl || ((...a) => fetch(...a));
+    this.token = token; this.fetch = fetchImpl || ((...a) => fetch(...a)); this.stats = { calls: 0, bytes: 0 };
   }
   async call(method, path, body) {
-    let res;
+    let res; this.stats.calls++;
     try {
       res = await this.fetch(`${this.base}/v1${path}`, {
         method, headers: { "X-Auth-Token": this.token, "Content-Type": "application/json" },
@@ -19,15 +19,18 @@ export class Miniflux {
     } catch {
       throw new PlainError("Could not reach Miniflux. Check the connection or the server address; the reader will use the copy saved on this machine.", "unreachable");
     }
-    if (res.status === 401 || res.status === 403) throw new PlainError("Miniflux refused the API key. Create a new key in Miniflux under Settings, then API Keys, and enter it in Settings here.", "auth");
+    const fail = (plain, code) => { const e = new PlainError(plain, code); e.status = res.status; return e; };
+    if (res.status === 401 || res.status === 403) throw fail("Miniflux refused the API key. Create a new key in Miniflux under Settings, then API Keys, and enter it in Settings here.", "auth");
     if (res.status === 204) return null;
+    if (res.status === 429) throw fail("Miniflux is limiting how often feeds can be refreshed. Try again in a few minutes.", "rate-limit");
     if (!res.ok) {
       let msg = ""; try { const j = JSON.parse(await res.text()); msg = String((j && j.error_message) || "").replace(/[\u0000-\u001f]/g, " ").slice(0, 200); } catch { /* no body */ }
-      if (msg && res.status < 600) throw new PlainError(`Miniflux said: ${msg}`, "rejected");
-      throw new PlainError(`Miniflux answered with an unexpected reply (${res.status}). Try again in a minute.`, "bad-reply");
+      if (msg && res.status < 600) throw fail(`Miniflux said: ${msg}`, "rejected");
+      throw fail(`Miniflux answered with an unexpected reply (${res.status}). Try again in a minute.`, "bad-reply");
     }
-    const text = await res.text();
-    return text ? JSON.parse(text) : null;
+    const text = await res.text(); this.stats.bytes += text.length;
+    if (!text) return null;
+    try { return JSON.parse(text); } catch { throw fail("Miniflux sent a reply that is not readable. It may be restarting; try again in a minute.", "bad-reply"); }
   }
   me() { return this.call("GET", "/me"); }
   feeds() { return this.call("GET", "/feeds"); }
@@ -47,6 +50,13 @@ export class Miniflux {
   createCategory(title) { return this.call("POST", "/categories", { title }); }
   markFeedRead(feedId) { return this.call("PUT", `/feeds/${feedId}/mark-all-as-read`); }
   refreshAll() { return this.call("PUT", "/feeds/refresh"); }
+  version() { return this.call("GET", "/version"); }
+  entryIds(params = {}) { const q = new URLSearchParams(); for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) q.set(k, String(v)); return this.call("GET", "/entries/ids" + (q.toString() ? "?" + q : "")); }
+  updateFeed(id, body) { return this.call("PUT", `/feeds/${Number(id)}`, body); }
+  deleteFeed(id) { return this.call("DELETE", `/feeds/${Number(id)}`); }
+  updateCategory(id, body) { return this.call("PUT", `/categories/${Number(id)}`, body); }
+  refreshFeed(id) { return this.call("PUT", `/feeds/${Number(id)}/refresh`); }
+  refreshCategory(id) { return this.call("PUT", `/categories/${Number(id)}/refresh`); }
   async allUnread(cap = 3000) {
     const out = []; let offset = 0; const limit = 250;
     for (;;) {

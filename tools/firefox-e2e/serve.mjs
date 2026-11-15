@@ -5,6 +5,11 @@ import { world } from "../../test/helpers.mjs";
 
 const port = Number(process.argv[2] || 8799);
 const w = await world();
+if (process.env.BIG) { // a large synthetic library for performance probes: BIG=<folders>x<feeds per folder>
+  const [nf, per] = process.env.BIG.split("x").map(Number); let fid = 1000, eid = 5000; w.mf.st.feeds = []; w.mf.st.entries = [];
+  for (let c = 0; c < nf; c++) for (let k = 0; k < per; k++) { const id = fid++; w.mf.st.feeds.push({ id, title: `Synthetic feed ${c}-${k}`, category: { title: `Topic ${String(c).padStart(2, "0")}${k % 4 === 0 ? "/Sub " + (k % 3) : ""}` }, parsing_error_count: 0, checked_at: new Date().toISOString(), disabled: false });
+    for (let j = 0; j < 3; j++) { const e = { id: eid++, feed_id: id, feed: { id, title: `Synthetic feed ${c}-${k}`, category: { title: `Topic ${c}` } }, title: `Synthetic story ${c}-${k}-${j}`, content: "<p>Synthetic body.</p>", published_at: new Date(Date.now() - (j + 1) * 3600000).toISOString(), url: `https://site${id}.example/${eid}`, status: "unread", starred: false, author: "", tags: [], reading_time: 3 }; w.mf.st.entries.push(e); } }
+}
 const hit = { mf: 0, dav: 0, log: [] };
 const server = http.createServer(async (req, res) => {
   const chunks = []; for await (const c of req) chunks.push(c); const body = Buffer.concat(chunks).toString();

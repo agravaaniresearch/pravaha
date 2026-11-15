@@ -35,7 +35,7 @@ export class FeedDetect {
   }
   async clear(tabId) {
     await this._load(); if (!this.tabs.delete(tabId)) return; await this._save();
-    const a = this.api.action; try { await a.setIcon({ tabId, path: null }); await a.setBadgeText({ tabId, text: "" }); await a.setTitle({ tabId, title: null }); await a.setPopup({ tabId, popup: null }); } catch { /* the tab closed */ }
+    const a = this.api.action; try { await a.setIcon({ tabId, path: null }); await a.setBadgeText({ tabId, text: null }); await a.setTitle({ tabId, title: null }); await a.setPopup({ tabId, popup: null }); } catch { /* the tab closed */ }
   }
   async get(tabId) { await this._load(); const t = this.tabs.get(tabId); return t ? t.feeds : []; }
   async state() {

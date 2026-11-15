@@ -17,3 +17,17 @@ await A.open(2); await A.dismiss(3); await A.train("feed", 1, 1); await A.syncNo
 console.log("\nAfter the laptop opens the oncology trial, dismisses the pasta story and trains Harbour Weekly up:");
 show("Ranked on the desktop (a second machine that never saw those clicks directly):", B.getView({ ranked: true, mode: "all" }));
 console.log("\nStatus lights on the desktop:"); for (const l of B.status().lights) console.log(`  ${l.state.padEnd(6)} ${l.label}: ${l.sentence}`);
+
+// ---- 0.6.0: light refresh, feed management, server check ----
+console.log("\nSecond refresh on the laptop (nothing new):");
+await A.syncNow(); const nm = A.net.miniflux; console.log(`  ${nm.mode} refresh, ${nm.calls} requests, ${nm.bytes} bytes`);
+const e9 = entry(9, 3, "Quick sourdough starter guide", "Baking.", 1); e9.feed = { id: 3, title: "Table Talk", category: { title: "Food" } }; mf.st.entries.push(e9);
+await A.syncNow(); console.log(`After one new article: ${A.net.miniflux.mode} refresh, ${A.net.miniflux.calls} requests, ${A.net.miniflux.bytes} bytes`);
+console.log("\nFeed management:");
+console.log("  " + (await A.feedUpdate(3, { title: "Table Talk Weekly" })).sentence);
+console.log("  " + (await A.feedUpdate(3, { category: "Food/Baking" })).sentence);
+console.log("  " + (await A.feedUpdate(3, { disabled: true })).sentence);
+console.log("  " + (await A.folderRename("Defence", "Maritime")).sentence);
+console.log("  " + (await A.feedDelete(4, "wrong name")).sentence);
+console.log("\nCheck server (read-only):"); for (const l of (await A.serverCheck()).lines) console.log(`  ${l.state.padEnd(6)} ${l.text}`);
+console.log("\nFolder tree now:"); for (const n of A.tree()) console.log("  " + "  ".repeat(n.depth) + n.label + (n.unread ? ` (${n.unread})` : ""));
