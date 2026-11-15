@@ -9,14 +9,14 @@ import { world, settings, entry } from "./helpers.mjs";
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 const until = async (fn, ms = 6000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await wait(40); } return !!fn(); };
 let n = 0;
-async function mount({ prep, noToken = false, prefs = null } = {}) {
+async function mount({ prep, noToken = false, prefs = null, fontProbe = null } = {}) {
   const w = await world(); if (prep) prep(w);
   const storage = new MemoryStorage(); await storage.set({ settings: settings("laptop", noToken ? { miniflux: { url: "https://mf.test", token: "" } } : {}) });
   const listeners = []; const opened = [];
   const engine = new Engine({ storage, fetchImpl: w.fetchImpl, onChange: () => listeners.forEach(f => f({ type: "changed" })) }); await engine.load(); if (!noToken) await engine.syncNow();
   const handlers = makeHandlers({ engine, fetchImpl: w.fetchImpl, runSync: () => engine.syncNow(), schedule: async () => {}, openTab: async (r) => { opened.push(r.url); }, saveSynced: async () => {} });
   const dom = new JSDOM('<!doctype html><html data-theme="auto"><body><div id="app"></div></body></html>', { url: "http://pravaha.test/ui/reader.html", pretendToBeVisual: true });
-  const win = dom.window; win.HTMLElement.prototype.scrollIntoView = () => {}; win.matchMedia = () => ({ matches: false, addEventListener() {} });
+  const win = dom.window; win.HTMLElement.prototype.scrollIntoView = () => {}; win.matchMedia = () => ({ matches: false, addEventListener() {} }); if (fontProbe) win.document.fonts = { load: async (spec) => fontProbe(spec) };
   const ios = []; win.IntersectionObserver = class { constructor(cb) { this.cb = cb; this.els = new Set(); ios.push(this); } observe(e) { this.els.add(e); } disconnect() { this.els.clear(); } };
   const defs = { window: win, document: win.document, localStorage: win.localStorage, navigator: win.navigator, location: win.location, history: win.history, getComputedStyle: win.getComputedStyle.bind(win), IntersectionObserver: win.IntersectionObserver, requestAnimationFrame: (f) => setTimeout(f, 0) };
   for (const [k, v] of Object.entries(defs)) Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true });
@@ -247,10 +247,11 @@ test("the Bionic button sits in the top bar and the card; Shift+B toggles; the c
   row.querySelector(".btn.bionic").click(); await wait(60); assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).anchor, true); assert.match(t.$$(".toast").at(-1).textContent, /Bionic reading is on/); assert.doesNotMatch(t.$$(".toast").at(-1).textContent, /null/); t.close();
 });
 test("more fonts: reading and interface fonts apply at once, are remembered, and an unknown value falls back safely", async () => {
-  const t = await mount(); t.$(".aa").click(); const rf = t.$(".pop select"); assert.ok([...rf.options].length >= 8, "eight reading fonts"); rf.value = "lora"; rf.dispatchEvent(new t.win.Event("change", { bubbles: true })); await wait(40);
+  const t = await mount(); t.$(".aa").click(); const rf = t.$(".pop select"); assert.ok([...rf.options].length >= 11, "eleven reading fonts"); assert.equal(rf.querySelectorAll("optgroup").length, 2, "serif and sans groups"); rf.value = "lora"; rf.dispatchEvent(new t.win.Event("change", { bubbles: true })); await wait(40);
   assert.equal(t.win.document.documentElement.style.getPropertyValue("--read-font"), "var(--serif-lora)"); assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).readFont, "lora");
   t.$$(".tab").find(b => b.textContent.includes("Settings")).click(); await wait(60); t.$$(".stab").find(b => b.textContent.includes("Look")).click(); await wait(40);
-  const ui = t.$$(".field select").find(s => [...s.options].some(o => o.textContent === "Source Sans")); ui.value = "sourcesans"; ui.dispatchEvent(new t.win.Event("change", { bubbles: true })); await wait(30);
+  const cards = (label) => t.$$(".fontcard").filter(c => c.querySelector(".fname").textContent.startsWith(label));
+  const ui = cards("Source Sans")[0]; assert.ok(ui, "a card for the interface font"); ui.click(); await wait(30);
   assert.equal(t.win.document.documentElement.style.getPropertyValue("--ui"), "var(--ui-sourcesans)"); t.close();
   const bad = await mount({ prefs: { readFont: "comic-sans", uiFont: "x", confirmRead: "sometimes" } }); assert.equal(bad.win.document.documentElement.style.getPropertyValue("--read-font"), "var(--serif-newsreader)"); assert.equal(bad.win.document.documentElement.style.getPropertyValue("--ui"), "var(--ui-plex)"); bad.close();
 });
@@ -262,4 +263,23 @@ test("toasts survive a redraw, stack, replace duplicates and can be dismissed", 
   const t = await mount(); t.$(".tab[aria-selected='true']").click(); t.$$(".ibtn").find(b => b.title.startsWith("Theme")).click(); await wait(30); const n1 = t.$$(".toast").length; assert.equal(n1, 1);
   t.$$(".ibtn").find(b => b.title.startsWith("Theme")).click(); await wait(30); assert.equal(t.$$(".toast").length, 2, "a different message stacks");
   t.$(".toast .tx").click(); await wait(300); assert.equal(t.$$(".toast").length, 1); t.$$(".tab").find(b => b.textContent.includes("Stats")).click(); await wait(100); assert.equal(t.$$(".toast").length, 1, "a page change does not wipe it"); t.close();
+});
+
+test("Ubuntu, New York and SF Pro are offered, picked from cards and remembered", async () => {
+  const t = await mount(); t.$$(".tab").find(b => b.textContent.includes("Settings")).click(); await wait(60); t.$$(".stab").find(b => b.textContent.includes("Look")).click(); await wait(40);
+  const names = (n) => t.$$(".fontcard").map(c => c.querySelector(".fname").textContent.replace("In use", "")); const all = names();
+  for (const f of ["Ubuntu", "SF Pro"]) assert.equal(all.filter(x => x === f).length, 2, f + " is in both pickers"); assert.equal(all.filter(x => x === "New York").length, 1, "New York is a serif, so only a reading font");
+  assert.equal(t.$$(".fonthead").length, 3, "the reading picker has Serif and Sans headings, the interface picker only Sans"); assert.ok(t.$$(".fontcard .fnote").every(n => n.textContent.length > 10), "every card says in words what the font is for");
+  const pick = async (label, nth) => { t.$$(".fontcard").filter(c => c.querySelector(".fname").textContent.replace("In use", "") === label)[nth].click(); await wait(30); };
+  await pick("Ubuntu", 0); assert.equal(t.win.document.documentElement.style.getPropertyValue("--read-font"), "var(--serif-ubuntu)");
+  await pick("Ubuntu", 1); assert.equal(t.win.document.documentElement.style.getPropertyValue("--ui"), "var(--ui-ubuntu)");
+  await pick("New York", 0); assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).readFont, "newyork");
+  assert.equal(t.$$(".fontcard[aria-pressed='true']").length, 2, "one card is marked in use per picker"); t.close();
+});
+test("an Apple font missing from this build is shown as unavailable and cannot be chosen", async () => {
+  const t = await mount({ fontProbe: (spec) => spec.includes("Pravaha SF Pro") ? [] : [{}] }); await wait(30);
+  t.$$(".tab").find(b => b.textContent.includes("Settings")).click(); await wait(60); t.$$(".stab").find(b => b.textContent.includes("Look")).click(); await wait(60);
+  const sf = t.$$(".fontcard").filter(c => c.querySelector(".fname").textContent.startsWith("SF Pro")); assert.equal(sf.length, 2); assert.ok(sf.every(c => c.disabled && /apple-fonts/.test(c.textContent)), "SF Pro is disabled with the fix named");
+  const ny = t.$$(".fontcard").filter(c => c.querySelector(".fname").textContent.startsWith("New York")); assert.ok(ny.every(c => !c.disabled), "New York, which loaded, stays available");
+  t.$(".aa").click(); const rf = t.$(".pop select"); assert.ok([...rf.options].find(o => o.value === "sfpro").disabled, "the popover disables it too"); t.close();
 });

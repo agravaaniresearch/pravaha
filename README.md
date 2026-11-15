@@ -18,7 +18,7 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Asks before marking a whole section or folder** (settings: never, sections and mark all, always).
 - **Reorders folders and feeds** with up and down arrows; the article list follows the sidebar.
 - **Adds feeds from a website.** Press `a`, paste an address, Miniflux finds the feeds on it, pick one and a folder (or make a new one). Right-click any page or link, then "Find feeds here with Pravaha", to start from there.
-- **Has an OLED black theme** besides light and dark, eight reading fonts and four interface fonts (all bundled), and reading controls for size, line gap and width.
+- **Has an OLED black theme** besides light and dark, eleven reading fonts and five interface fonts, chosen from labelled cards with a live sample (all open fonts bundled; Apple's SF Pro and New York can be added for your own build, see below), and reading controls for size, line gap and width.
 - **Shows relevance as colour.** There are no Good, Great or Best tiers. Each row has a bar and a chip that darken as the score rises. Three palettes are included: ember, saffron and moss.
 - **Learns from what you do.** Opening in a tab, reading a card, reading for more than 15 seconds, saving and dismissing all move a feed's standing. They fade with a 14 day half life. Opens and saves also pull your interest profile toward the article.
 - **Trains like NewsBlur.** Open an article's details and choose More or Less for the feed, the author or a keyword.
@@ -49,6 +49,7 @@ New in 0.3.0:
 | ![Syncing with Miniflux](docs/screenshots/12-syncing-with-miniflux.png)<br>**Syncing.** The top-right pill and a bar on each section show changes still going to Miniflux. | ![Toast with undo](docs/screenshots/13-toast-with-undo.png)<br>**Toasts.** Every bulk action reports whether Miniflux confirmed it, with Undo. |
 | ![Reorder folders](docs/screenshots/14-reorder-folders.png)<br>**Reorder.** Move folders and feeds up and down. | ![Add a feed](docs/screenshots/15-add-feed.png)<br>**Add a feed.** Paste a site, pick a discovered feed and a folder. |
 | ![Bionic button](docs/screenshots/16-bionic-button-and-fonts.png)<br>**Bionic button** in the top bar and on the card. | ![Fonts and confirm settings](docs/screenshots/17-settings-fonts-and-confirm.png)<br>**Fonts and Marking read** settings. |
+| ![Font picker](docs/screenshots/18-font-picker.png)<br>**Font picker (0.3.1).** Serif and sans groups, each card in its own font. SF Pro and New York show "Not in this build" until you build them locally. | |
 
 ## Example run on synthetic data
 
@@ -119,7 +120,8 @@ Reading it: the shipbuilding and radiotherapy stories lead because the invented 
 - **Read on scroll** is a toolbar toggle. It marks an article read only after you have seen it and it leaves through the top of the screen, and it is neutral for ranking.
 - **Mark section read** marks every unread article of that feed read in Miniflux, including ones not shown because the list is long, and folds the section away. Undo is on the message that follows.
 - **Themes:** light, dark and OLED black, plus three relevance palettes (ember, saffron, moss).
-- **Reading type:** Newsreader, Literata, Source Serif, Lora, Crimson Pro, Merriweather, Atkinson Hyperlegible or the system serif for articles; IBM Plex Sans, Source Sans, Atkinson Hyperlegible or the system font for the interface. All are bundled, so nothing loads from the web. Size, line gap, width and Bionic strength are in the Aa menu and in Settings.
+- **Reading type:** serifs (Newsreader, Literata, New York, Source Serif, Lora, Crimson Pro, Merriweather, the system serif) and sans fonts (Atkinson Hyperlegible, SF Pro, Ubuntu) for articles; IBM Plex Sans, Source Sans, Atkinson Hyperlegible, SF Pro, Ubuntu or the system font for the interface. Settings shows each as a card set in its own font, with a one-line note on what it suits. All the open fonts are bundled, so nothing loads from the web.
+- **Apple fonts (SF Pro, New York), personal builds only:** Apple's fonts are not in this repository and must not be added to it. Run `pip install fonttools brotli`, then `python3 tools/apple-fonts.py`. It fetches the community SFWindows collection, cuts small Latin files into `extension/ui/fonts/apple/` (git-ignored) and the next build includes them. Without them the two cards show "Not in this build" and cannot be chosen. Never share an extension built this way. Size, line gap, width and Bionic strength are in the Aa menu and in Settings.
 
 ### Searching
 
@@ -249,7 +251,7 @@ See [docs/SCHEMA.md](docs/SCHEMA.md), [docs/POLICY.md](docs/POLICY.md) and [docs
 
 ## Licence
 
-Pravaha includes code from Bionify (GPL-3.0), so it is released under the GNU General Public License v3. The full text is in `LICENSE`. Bundled fonts are under the SIL Open Font Licence (see `extension/ui/fonts`).
+Pravaha includes code from Bionify (GPL-3.0), so it is released under the GNU General Public License v3. The full text is in `LICENSE`. Bundled fonts are under the SIL Open Font Licence, except Ubuntu, which is under the Ubuntu Font Licence 1.0 (see `extension/ui/fonts`). SF Pro and New York belong to Apple and are not included.
 
 ## Disclaimer
 

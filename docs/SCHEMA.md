@@ -90,7 +90,7 @@ Interface preferences (theme, palette, density, thumbnails, read on scroll, read
 
 ### Fonts
 
-Bundled fonts, all under the SIL Open Font Licence (licences are in `extension/ui/fonts/`). Reading: Newsreader, Literata, Source Serif 4, Lora, Crimson Pro, Merriweather, Atkinson Hyperlegible, plus the system serif. Interface: IBM Plex Sans, Source Sans 3, Atkinson Hyperlegible, plus the system sans. Only the Latin subset of each is bundled.
+Bundled fonts: OFL, except Ubuntu (Ubuntu Font Licence 1.0); licences are in `extension/ui/fonts/`. Reading ids: `newsreader`, `literata`, `newyork`, `sourceserif`, `lora`, `crimson`, `merriweather`, `system`, `atkinson`, `sfpro`, `ubuntu`. Interface ids: `plex`, `sourcesans`, `atkinson`, `sfpro`, `ubuntu`, `system`. `newyork` and `sfpro` are Apple fonts, present only in a locally built extension (`extension/ui/fonts/apple/`, git-ignored); the reader probes for them and disables the card when absent. An unknown or removed id falls back to the default. The `FONT_INFO` table in `ui/prefs.js` holds each font's group and one-line note. Only the Latin subset of each is bundled.
 
 ## Miniflux calls
 

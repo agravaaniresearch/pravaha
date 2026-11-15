@@ -53,6 +53,10 @@ Install the new `.xpi` over the old one, as in step 3. Settings, history and the
 
 To go back, install the older `.xpi` over this one. The extra storage keys (`searchIndex`, `cache.recent`, `settings.treeOrder`) are ignored by older versions.
 
+## 5c. Optional: SF Pro and New York (your own build only)
+
+Apple's fonts are not in the repository. To use them yourself: `pip install fonttools brotli`, `python3 tools/apple-fonts.py`, then build and sign as usual from the same checkout. The files land in `extension/ui/fonts/apple/`, which is git-ignored, so they stay out of commits. The signed build from the GitHub release workflow will not contain them (the picker will show "Not in this build"); sign locally if you want them. Do not share an extension built this way.
+
 ## 6. Backups and recovery
 
 - Miniflux holds the read state and stars. Export OPML from Miniflux for the feeds.

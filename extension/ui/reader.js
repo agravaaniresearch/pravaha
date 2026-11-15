@@ -3,7 +3,7 @@ import { h, icon, pct, ago, longAgo } from "./dom.js";
 import { gradeColor, disp } from "../src/grade.js";
 import { renderSafe } from "../src/safehtml.js";
 import { anchorTree } from "../src/anchor.js";
-import { loadPrefs, savePrefs, applyPrefs, clamp, READ_FONTS, UI_FONTS, CONFIRM_MODES } from "./prefs.js";
+import { loadPrefs, savePrefs, applyPrefs, clamp, READ_FONTS, UI_FONTS, FONT_INFO, CONFIRM_MODES } from "./prefs.js";
 
 const $app = document.getElementById("app");
 const MUTATING = new Set(["markRead", "markUnread", "markScope", "save", "dismiss", "undismissAll", "syncNow", "subscribe", "searchServer", "card", "open"]);
@@ -82,6 +82,7 @@ async function boot() {
   S.settings = b.settings; S.tree = b.tree; S.status = b.status; S.rules = b.rules || []; S.icons = b.icons || {}; S.iconCount = Object.keys(S.icons).length;
   U = loadPrefs(b.settings.theme); applyPrefs(U, document.documentElement, prefersDark());
   if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyPrefs(U, document.documentElement, prefersDark()));
+  probeFonts();
   if (!b.settings.miniflux.token) S.tab = "settings";
   if (isFeedTab()) await loadView(); else render();
   handleHash(); kickSync();
@@ -497,6 +498,33 @@ function renderChrome() {
   const body = $app.querySelector(".body"); if (!body) return render();
   keepSearchFocus(() => { $app.querySelector(".top")?.replaceWith(topBar()); const side = body.querySelector(".side"); if (side) side.replaceWith(sideBar()); body.dataset.side = U.side ? "on" : "off"; });
 }
+// Apple fonts are built locally and may be absent. Until the probe answers (or where the browser cannot probe) a font counts as present.
+const fontOk = {};
+function probeFonts() {
+  for (const [id, info] of Object.entries(FONT_INFO)) {
+    if (!info.apple || !document.fonts || !document.fonts.load) continue;
+    document.fonts.load(`400 16px "${info.apple}"`).then((r) => { fontOk[id] = r.length > 0; }, () => { fontOk[id] = false; }).then(() => { if (S.pop === "aa") renderPop(); if (S.tab === "settings") renderMain(); });
+  }
+}
+const fontHere = (id) => fontOk[id] !== false;
+const infoOf = (id, ui) => ui && id === "system" ? { kind: "sans", note: "Whatever sans-serif your computer provides." } : FONT_INFO[id] || { kind: "sans", note: "" };
+function fontPicker(list, key, cssVar, sample) {
+  const ui = cssVar === "ui";
+  const card = ([id, label]) => {
+    const info = infoOf(id, ui); const ok = fontHere(id); const fam = `var(--${cssVar}-${id})`;
+    return h("button", { class: "fontcard", "aria-pressed": String(U[key] === id), disabled: !ok, title: ok ? label : label + " is not in this build", onclick: () => { setPref({ [key]: id }); renderMain(); } },
+      h("span", { class: "fname", style: { fontFamily: fam } }, label, U[key] === id ? h("i", {}, "In use") : null),
+      h("span", { class: "fsample", style: { fontFamily: fam } }, sample),
+      h("span", { class: "fnote" }, ok ? info.note : "Not in this build. Run tools/apple-fonts.py, then rebuild."));
+  };
+  const serif = list.filter(([id]) => infoOf(id, ui).kind === "serif"), sans = list.filter(([id]) => infoOf(id, ui).kind !== "serif");
+  return h("div", { class: "fonts" }, serif.length ? [h("div", { class: "fonthead" }, "Serif: the classic choice for long articles"), ...serif.map(card)] : null, sans.length ? [h("div", { class: "fonthead" }, "Sans: clean and compact"), ...sans.map(card)] : null);
+}
+function fontSelect(list, key, onpick) {
+  const opt = ([id, l]) => h("option", { value: id, selected: U[key] === id, disabled: !fontHere(id), style: { fontFamily: `var(--${key === "readFont" ? "serif" : "ui"}-${id})` } }, fontHere(id) ? l : l + " (not in this build)");
+  const g = (kind, title) => { const items = list.filter(([id]) => (infoOf(id, key === "uiFont").kind === "serif") === (kind === "serif")); return h("optgroup", { label: title }, items.map(opt)); };
+  return h("select", { "aria-label": key === "readFont" ? "Reading font" : "Interface font", onchange: (e) => onpick(e.target.value) }, g("serif", "Serif"), g("sans", "Sans"));
+}
 function range(label, key, lo, hi, step, fmt = (v) => v) {
   const out = h("span", {}, fmt(U[key]));
   return h("label", { class: "range" }, h("span", {}, label), h("input", { type: "range", min: lo, max: hi, step, value: U[key], oninput: (e) => { setPref({ [key]: Number(e.target.value) }); out.textContent = fmt(U[key]); } }), out);
@@ -504,7 +532,7 @@ function range(label, key, lo, hi, step, fmt = (v) => v) {
 function renderPop() {
   $app.querySelector(".pop")?.remove(); if (S.pop !== "aa") return;
   $app.append(h("div", { class: "pop", role: "dialog", "aria-label": "Reading type", onclick: (e) => e.stopPropagation() },
-    h("select", { "aria-label": "Reading font", onchange: (e) => { setPref({ readFont: e.target.value }); renderPop(); } }, READ_FONTS.map(([id, l]) => h("option", { value: id, selected: U.readFont === id, style: { fontFamily: `var(--serif-${id})` } }, l))),
+    fontSelect(READ_FONTS, "readFont", (v) => { setPref({ readFont: v }); renderPop(); }),
     range("Size", "readSize", 15, 26, 1, (v) => v + "px"), range("Line gap", "readLine", 1.3, 2, 0.05, (v) => Number(v).toFixed(2)), range("Width", "readWidth", 46, 90, 2, (v) => v + "ch"),
     h("label", { class: "check" }, h("input", { type: "checkbox", checked: U.anchor, onchange: (e) => { setPref({ anchor: e.target.checked }); renderPop(); } }), "Bionic reading (Shift+B)"),
     range("Strength", "anchorLevel", 1, 5, 1, (v) => ["", "Lightest", "Light", "Medium", "Strong", "Strongest"][v]),
@@ -617,7 +645,8 @@ function settingsMain() {
       h("div", { class: "grid2" }, sel("Ask before marking read", CONFIRM_MODES, U.confirmRead, (v) => setPref({ confirmRead: v }))),
       h("p", { class: "note" }, "Sections and mark all is the default: a single article never asks, a whole section or folder does. Scrolling past an article never asks, and a bulk mark can always be undone from its message.")),
     h("div", { class: "panel" }, h("h2", {}, "Fonts"),
-      h("div", { class: "grid2" }, sel("Reading font", READ_FONTS, U.readFont, (v) => { setPref({ readFont: v }); }), sel("Interface font", UI_FONTS, U.uiFont, (v) => { setPref({ uiFont: v }); }))),
+      h("div", { class: "field" }, "Reading font (articles and cards)", fontPicker(READ_FONTS, "readFont", "serif", "Reading is calmer when the type is.")),
+      h("div", { class: "field", style: { marginTop: "14px" } }, "Interface font (menus, lists and buttons)", fontPicker(UI_FONTS, "uiFont", "ui", "Newsfeed, Saved, Stats 0123456789"))),
     h("div", { class: "panel" }, h("h2", {}, "Reading type"),
       range("Size", "readSize", 15, 26, 1, (v) => v + "px"), range("Line gap", "readLine", 1.3, 2, 0.05, (v) => Number(v).toFixed(2)), range("Width", "readWidth", 46, 90, 2, (v) => v + "ch"),
       chk("Bionic reading: bold the start of each word (English and other Latin text)", U, "anchor", (v) => { setPref({ anchor: v }); renderChrome(); renderMain(); }), range("Bionic strength", "anchorLevel", 1, 5, 1, (v) => ["", "Lightest", "Light", "Medium", "Strong", "Strongest"][v]),

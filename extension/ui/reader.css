@@ -16,10 +16,25 @@
 @font-face { font-family: "Atkinson Hyperlegible"; src: url("fonts/atkinson-hyperlegible-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
 @font-face { font-family: "Atkinson Hyperlegible"; src: url("fonts/atkinson-hyperlegible-latin-400-italic.woff2") format("woff2"); font-weight: 400; font-style: italic; font-display: swap; }
 @font-face { font-family: "Atkinson Hyperlegible"; src: url("fonts/atkinson-hyperlegible-latin-700-normal.woff2") format("woff2"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Ubuntu"; src: url("fonts/ubuntu-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Ubuntu"; src: url("fonts/ubuntu-latin-400-italic.woff2") format("woff2"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Ubuntu"; src: url("fonts/ubuntu-latin-500-normal.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Ubuntu"; src: url("fonts/ubuntu-latin-700-normal.woff2") format("woff2"); font-weight: 600 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Ubuntu"; src: url("fonts/ubuntu-latin-700-italic.woff2") format("woff2"); font-weight: 600 700; font-style: italic; font-display: swap; }
+/* Apple fonts are built locally (tools/apple-fonts.py) and are not in the repository. If the files are absent the browser moves on to the fallbacks. */
+@font-face { font-family: "Pravaha SF Pro"; src: url("fonts/apple/sf-pro-latin-wght-normal.woff2") format("woff2"); font-weight: 300 800; font-style: normal; font-display: swap; }
+@font-face { font-family: "Pravaha SF Pro"; src: url("fonts/apple/sf-pro-latin-wght-italic.woff2") format("woff2"); font-weight: 300 800; font-style: italic; font-display: swap; }
+@font-face { font-family: "Pravaha New York"; src: url("fonts/apple/new-york-latin-wght-normal.woff2") format("woff2"); font-weight: 400 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Pravaha New York"; src: url("fonts/apple/new-york-latin-wght-italic.woff2") format("woff2"); font-weight: 400 900; font-style: italic; font-display: swap; }
 :root {
   --ui-plex: "Plex", system-ui, -apple-system, "Segoe UI", "Noto Sans", "Noto Sans Devanagari", sans-serif;
   --ui-sourcesans: "Source Sans 3", system-ui, "Segoe UI", "Noto Sans", "Noto Sans Devanagari", sans-serif;
   --ui-atkinson: "Atkinson Hyperlegible", system-ui, "Segoe UI", "Noto Sans", sans-serif;
+  --ui-sfpro: "Pravaha SF Pro", -apple-system, system-ui, "Segoe UI", "Noto Sans", "Noto Sans Devanagari", sans-serif;
+  --ui-ubuntu: "Ubuntu", system-ui, "Segoe UI", "Noto Sans", "Noto Sans Devanagari", sans-serif;
+  --serif-newyork: "Pravaha New York", "New York", Georgia, "Noto Serif", "Noto Serif Devanagari", serif;
+  --serif-sfpro: "Pravaha SF Pro", -apple-system, system-ui, "Noto Sans", "Noto Sans Devanagari", sans-serif;
+  --serif-ubuntu: "Ubuntu", system-ui, "Noto Sans", "Noto Sans Devanagari", sans-serif;
   --ui-system: system-ui, -apple-system, "Segoe UI", "Noto Sans", "Noto Sans Devanagari", sans-serif;
   --serif-sourceserif: "Source Serif 4", Georgia, "Noto Serif", "Noto Serif Devanagari", serif;
   --serif-lora: "Lora", Georgia, "Noto Serif", "Noto Serif Devanagari", serif;
@@ -344,3 +359,15 @@ mark { background: color-mix(in srgb, var(--amber) 55%, transparent); color: inh
 .ghead[data-search="true"] .chev { display: inline-flex; color: var(--muted); }
 .pill { white-space: nowrap; flex: none; }
 .pill .ptext { overflow: hidden; text-overflow: ellipsis; max-width: 26ch; }
+
+/* Font picker */
+.fonts { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; margin-top: 6px; }
+.fonthead { grid-column: 1 / -1; margin: 8px 0 0; font-size: 12px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+.fontcard { text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); cursor: pointer; font: inherit; }
+.fontcard:hover { border-color: var(--accent); }
+.fontcard[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.fontcard[disabled] { opacity: .5; cursor: not-allowed; }
+.fontcard .fname { font-size: 17px; font-weight: 600; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.fontcard .fname i { font: 12px var(--ui); font-style: normal; color: var(--accent); }
+.fontcard .fsample { font-size: 15px; line-height: 1.4; color: var(--text); }
+.fontcard .fnote { font: 12px/1.35 var(--ui); color: var(--muted); }

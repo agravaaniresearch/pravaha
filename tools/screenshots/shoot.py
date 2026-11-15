@@ -2,7 +2,7 @@
 import json, subprocess, time, sys, os
 from playwright.sync_api import sync_playwright
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-OUT = os.path.join(ROOT, "docs", "screenshots")
+OUT = os.environ.get("SHOT_OUT") or os.path.join(ROOT, "docs", "screenshots")
 srv = subprocess.Popen([sys.executable, "-m", "http.server", "8765", "--directory", ROOT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(1)
 URL = "http://localhost:8765/tools/screenshots/harness.html"
@@ -40,6 +40,7 @@ try:
         pg, _ = page(prefs(theme="dark")); pg.keyboard.press("a"); pg.wait_for_timeout(300); pg.locator(".dialog .urlrow input").fill("harbourweekly.example"); pg.locator("[data-act='find']").click(); pg.wait_for_timeout(700); pg.locator(".feedopt input").first.check(); pg.wait_for_timeout(200); shot(pg, "15-add-feed")
         pg, _ = page(prefs(theme="light", anchor=True, readFont="sourceserif")); pg.locator(".row .rtitle").first.click(); pg.wait_for_timeout(900); shot(pg, "16-bionic-button-and-fonts")
         pg, _ = page(prefs(theme="dark")); pg.locator(".tab", has_text="Settings").click(); pg.wait_for_timeout(400); pg.locator(".stab", has_text="Look").click(); pg.wait_for_timeout(500); shot(pg, "17-settings-fonts-and-confirm")
+        pg, _ = page(prefs(theme="dark", readFont="newyork", uiFont="ubuntu")); pg.locator(".tab", has_text="Settings").click(); pg.wait_for_timeout(400); pg.locator(".stab", has_text="Look").click(); pg.wait_for_timeout(600); pg.evaluate("[...document.querySelectorAll('.panel h2')].find(x => x.textContent === 'Fonts').scrollIntoView({block: 'start'})"); pg.wait_for_timeout(300); shot(pg, "18-font-picker")
         b.close()
 finally:
     srv.terminate()

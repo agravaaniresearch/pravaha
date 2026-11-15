@@ -1,6 +1,22 @@
 // Look-and-feel preferences. They live in localStorage on this machine and apply instantly.
-export const READ_FONTS = [["newsreader", "Newsreader"], ["literata", "Literata"], ["sourceserif", "Source Serif"], ["lora", "Lora"], ["crimson", "Crimson Pro"], ["merriweather", "Merriweather"], ["atkinson", "Atkinson Hyperlegible"], ["system", "System serif"]];
-export const UI_FONTS = [["plex", "IBM Plex Sans"], ["sourcesans", "Source Sans"], ["atkinson", "Atkinson Hyperlegible"], ["system", "System"]];
+export const READ_FONTS = [["newsreader", "Newsreader"], ["literata", "Literata"], ["newyork", "New York"], ["sourceserif", "Source Serif"], ["lora", "Lora"], ["crimson", "Crimson Pro"], ["merriweather", "Merriweather"], ["system", "System serif"], ["atkinson", "Atkinson Hyperlegible"], ["sfpro", "SF Pro"], ["ubuntu", "Ubuntu"]];
+export const UI_FONTS = [["plex", "IBM Plex Sans"], ["sourcesans", "Source Sans"], ["atkinson", "Atkinson Hyperlegible"], ["sfpro", "SF Pro"], ["ubuntu", "Ubuntu"], ["system", "System"]];
+// What each font is, in plain words. kind: serif or sans. apple: built locally from tools/apple-fonts.py, never shipped in the repository.
+export const FONT_INFO = {
+  newsreader: { kind: "serif", note: "Made for reading news on screen. The default." },
+  literata: { kind: "serif", note: "Made for e-books. Sturdy and even at small sizes." },
+  newyork: { kind: "serif", note: "Apple's reading serif. Adjusts its shapes to the text size.", apple: "Pravaha New York" },
+  sourceserif: { kind: "serif", note: "Clear and a little crisp. Good for dense text." },
+  lora: { kind: "serif", note: "Warm and brush-like. Relaxed for long pieces." },
+  crimson: { kind: "serif", note: "Classic book type. Light and elegant; try a larger size." },
+  merriweather: { kind: "serif", note: "Wide and heavy. Easy to read on small or dim screens." },
+  system: { kind: "serif", note: "Whatever serif your computer provides." },
+  atkinson: { kind: "sans", note: "Made so look-alike letters are easy to tell apart." },
+  sfpro: { kind: "sans", note: "Apple's system font. Clean and compact.", apple: "Pravaha SF Pro" },
+  ubuntu: { kind: "sans", note: "Open, friendly shapes. Comfortable at medium sizes." },
+  plex: { kind: "sans", note: "Neutral and precise. The default." },
+  sourcesans: { kind: "sans", note: "Light and narrow. Fits more on a line." },
+};
 export const CONFIRM_MODES = [["never", "Never ask"], ["bulk", "Sections and mark all"], ["always", "Always ask"]];
 export const DEFAULTS = { theme: "auto", palette: "ember", density: "comfortable", thumbs: true, scrollRead: false, side: true, readFont: "newsreader", uiFont: "plex", confirmRead: "bulk", readSize: 19, readLine: 1.7, readWidth: 68, anchor: false, anchorLevel: 3 };
 const KEY = "pravaha.ui";
