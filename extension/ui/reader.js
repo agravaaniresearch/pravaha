@@ -25,6 +25,8 @@ export const S = {
 let U = loadPrefs();
 const prefersDark = () => !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
 let uiPushT = null;
+let lastFxLook = 0;
+document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "visible" || Date.now() - lastFxLook < 20000) return; lastFxLook = Date.now(); send({ type: "profilePull", force: false }).catch(() => {}); });
 const pushUi = () => { clearTimeout(uiPushT); uiPushT = setTimeout(() => { try { localStorage.setItem("pravaha.ui.at", String(Date.now())); } catch { /* ignore */ } send({ type: "saveUi", ui: U }).catch(() => {}); }, 500); };
 // Look and fonts chosen on another machine arrive in settings.ui; take them when they are newer than what this reader last saved.
 function adoptRemoteUi(settings) {
@@ -657,12 +659,12 @@ async function saveDraft() {
 // Shown on a machine with no keys: the three ways to set it up, with what Firefox Sync holds right now.
 function setupHero() {
   const fx = S.fx; const found = fx ? fx.parts.filter(p => p.remote) : []; const by = found.length ? found[0].remote.by : "";
-  const fxText = !fx ? "Looking in Firefox Sync." : !fx.readable ? "Firefox Sync storage could not be read in this browser." : found.length ? `Found a setup saved${by ? ` by ${by}` : ""} ${since(Math.max(...found.map(p => p.remote.at)))}. It is applied automatically; if it has not appeared, press Fetch.` : "Nothing yet. On your other machine open Settings, Move setup and press Send. Firefox Sync must be signed in here with Add-ons ticked, and can take a few minutes.";
+  const fxText = !fx ? "Looking in Firefox Sync." : !fx.readable ? "Firefox Sync storage could not be read in this browser." : found.length ? `Found a setup saved${by ? ` by ${by}` : ""} ${since(Math.max(...found.map(p => p.remote.at)))}. It is applied automatically; if it has not appeared, press Fetch.` : "Nothing yet. On your other machine open Settings, Move setup and press Send. Firefox Sync must be signed in here with Add-ons ticked. Firefox sends extension data about every 10 minutes; choose Sync Now in Firefox on both machines to hurry it.";
   return h("div", { class: "hero setup" }, h("h2", {}, "Set up this machine"),
     h("p", {}, "Pick whichever is easiest. Everything arrives the same way: keys first, then your articles from Miniflux, then your reading history from the WebDAV storage."),
     h("div", { class: "routes" },
       h("div", { class: "route", "data-route": "firefox-sync" }, h("h3", {}, "1. From Firefox Sync"), h("p", {}, fxText), h("button", { class: "btn", "data-act": "fx-pull", onclick: () => fxAct("pull", false) }, "Check Firefox Sync now")),
-      h("div", { class: "route", "data-route": "file" }, h("h3", {}, "2. From a settings file"), h("p", {}, "Made on your other machine with Settings, Move setup, Export."), h("button", { class: "btn", "data-act": "go-move", onclick: () => { S.stab = "move"; renderMain(); } }, "Import a file")),
+      h("div", { class: "route", "data-route": "file" }, h("h3", {}, "2. From a file or pasted text"), h("p", {}, "Made on your other machine with Settings, Move setup, Export or Copy as text. This route does not need Firefox Sync."), h("button", { class: "btn", "data-act": "go-move", onclick: () => { S.stab = "move"; renderMain(); } }, "Import a file or text")),
       h("div", { class: "route", "data-route": "type" }, h("h3", {}, "3. Type the keys"), h("p", {}, "Paste your Miniflux address and API key below. Each connection is tested as soon as its boxes are filled."))));
 }
 
@@ -711,8 +713,10 @@ function settingsMain() {
 const FX_NAMES = { keys: "Keys", settings: "Settings", order: "Folder order", ui: "Look and fonts" };
 function fxLine(p) {
   const by = p.remote && p.remote.by ? ` by ${p.remote.by}` : "";
-  if (p.state === "absent") return ["off", "Nothing in Firefox Sync yet."];
-  if (p.state === "level") return ["green", `In step. Saved${by} ${since(p.remote.at)}.`];
+  const mine = !!(p.remote && p.remote.by && S.settings && p.remote.by === S.settings.device);
+  if (p.state === "absent") return ["off", "Nothing in Firefox Sync on this machine yet."];
+  if (p.state === "level" && mine) return ["amber", `Written on this machine ${since(p.remote.at)}. Firefox sends it to your other machines on its next sync.`];
+  if (p.state === "level") return ["green", `Arrived${by} ${since(p.remote.at)}.`];
   if (p.state === "remote-newer") return ["amber", `A newer copy${by} (${since(p.remote.at)}) is waiting. Fetch it below.`];
   return ["amber", "This machine has newer changes that Firefox Sync has not received. Send them below."];
 }
@@ -722,9 +726,9 @@ async function fxAct(kind, force) {
   S.fx = r.summary;
   if (kind === "pull") {
     if (r.error) toast(r.error, { kind: "error" });
-    else if (!r.applied.length) toast(Object.keys(r.found).length ? "This machine already has everything that Firefox Sync holds." : "Firefox Sync holds nothing for Pravaha yet. On your other machine, open Settings, Move setup and press Send. Firefox Sync can take a few minutes to deliver it.", { kind: "info" });
+    else if (!r.applied.length) toast(Object.keys(r.found).length ? "This machine already has everything that Firefox Sync holds." : "Nothing has reached this machine from Firefox Sync yet. On the machine that has your keys, open Settings, Move setup and press Send, then choose Sync Now in Firefox on that machine and on this one.", { kind: "info" });
     else { const b = await send({ type: "boot" }); S.settings = b.settings; S.tree = b.tree; S.status = b.status; S.draft = null; adoptRemoteUi(b.settings); toast(`Took ${r.applied.map(a => PART_WORDS[a.part]).join(", ")} from Firefox Sync.`, { kind: "success" }); }
-  } else toast(r.error ? r.error : r.sent && r.sent.length ? `Sent ${r.sent.map(x => PART_WORDS[x]).join(", ")} to Firefox Sync. It reaches your other machines after Firefox's next sync.` : "Nothing to send yet. Fill in Connections first.", { kind: r.error ? "warn" : "success" });
+  } else toast(r.error ? r.error : r.sent && r.sent.length ? `Sent ${r.sent.map(x => PART_WORDS[x]).join(", ")} to Firefox Sync. It reaches your other machines when Firefox next syncs, about every 10 minutes, or at once if you choose Sync Now in Firefox.` : "Nothing to send yet. Fill in Connections first.", { kind: r.error ? "warn" : "success" });
   renderMain(); if (kind === "pull") renderChrome();
 }
 function fxCard() {
@@ -737,7 +741,7 @@ function fxCard() {
     tog("Carry my keys (Miniflux, WebDAV, Raindrop)", "keys"), tog("Carry settings, folder order and look", "settings"),
     h("div", { class: "dfoot left" }, h("button", { class: "btn", "data-act": "fx-push", onclick: () => fxAct("push", true) }, "Send this machine's setup now"),
       h("button", { class: "btn", "data-act": "fx-pull", onclick: async () => { if (await askConfirm({ title: "Replace this machine's setup?", body: "This takes the copy held in Firefox Sync for the parts you carry, even where this machine has newer changes.", confirmLabel: "Fetch and replace" })) fxAct("pull", true); } }, "Fetch from Firefox Sync now")),
-    h("p", { class: "note" }, "Firefox Sync must be signed in on both machines, with Add-ons ticked under Settings, Sync, Change. Firefox delivers new data in the background, usually within a few minutes. Machine names are never carried, so each machine keeps its own."));
+    h("p", { class: "note" }, "Firefox Sync must be signed in on both machines, with Add-ons ticked under Settings, Sync, Change. Firefox sends extension data about every 10 minutes. To make it immediate, choose Sync Now in Firefox (the account icon, or Settings, Sync) on the sending machine first and then on the receiving machine. Machine names are never carried, so each machine keeps its own."));
 }
 const download = (name, text) => { try { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "application/json" })); a.download = name; document.body.append(a); a.click(); a.remove(); return true; } catch { return false; } };
 function filePanel() {
@@ -747,6 +751,13 @@ function filePanel() {
     if (!r.ok) return toast(r.sentence, { kind: "error" });
     const saved = download(r.filename, r.text);
     toast(saved ? `Saved ${r.filename}${r.keys ? ". The keys in it are sealed with your passphrase" : ". It holds no keys"}${r.events ? `, with ${r.events.toLocaleString()} history events` : ""}.` : "The file could not be saved from this page.", { kind: saved ? "success" : "error" });
+  };
+  const copyNow = async () => {
+    const r = await send({ type: "exportSettings", keys: ex.keys, passphrase: ex.pass, history: false, ui: U });
+    if (!r.ok) return toast(r.sentence, { kind: "error" });
+    let ok = false; try { await navigator.clipboard.writeText(r.text); ok = true; } catch { /* shown below instead */ }
+    if (ok) { ex.shown = ""; toast(`Copied. On the other machine, paste it under Import${r.keys ? " and enter the same passphrase" : ""}.`, { kind: "success" }); } else { ex.shown = r.text; toast("Your browser did not allow copying. Select the text below and copy it yourself.", { kind: "warn" }); }
+    renderMain();
   };
   const importNow = async () => {
     if (!im.text) return toast("Choose a settings file first.", { kind: "warn" });
@@ -762,9 +773,12 @@ function filePanel() {
     h("label", { class: "check" }, h("input", { type: "checkbox", checked: ex.keys, "data-exp": "keys", onchange: (e) => { ex.keys = e.target.checked; renderMain(); } }), "Include my keys, sealed with a passphrase"),
     ex.keys ? h("label", { class: "field" }, "Passphrase (you will need it to import the keys)", h("input", { type: "password", autocomplete: "new-password", value: ex.pass, "data-exp": "pass", oninput: (e) => { ex.pass = e.target.value; } })) : null,
     h("label", { class: "check" }, h("input", { type: "checkbox", checked: ex.history, "data-exp": "history", onchange: (e) => { ex.history = e.target.checked; } }), "Include my reading history and training (can be large)"),
-    h("div", { class: "dfoot left" }, h("button", { class: "btn primary", "data-act": "export", onclick: exportNow }, "Export settings file")),
+    h("div", { class: "dfoot left" }, h("button", { class: "btn primary", "data-act": "export", onclick: exportNow }, "Export settings file"), h("button", { class: "btn", "data-act": "copy-text", onclick: copyNow }, "Copy as text instead")),
+    ex.shown ? h("textarea", { class: "pastebox", readonly: "readonly", rows: "5", "data-exp": "shown", "aria-label": "Setup text to copy", onfocus: (e) => e.target.select() }, ex.shown) : null,
+    h("p", { class: "note" }, "Copying as text leaves out the reading history. Paste the text into a note or message to yourself, then into Import on the other machine."),
     h("h3", {}, "Import"),
     h("label", { class: "field" }, "Settings file", h("input", { type: "file", accept: ".json,application/json", "data-act": "import-file", onchange: async (e) => { const f = e.target.files && e.target.files[0]; if (!f) return; im.name = f.name; im.text = await f.text(); im.needPass = /"keys":\s*\{/.test(im.text); im.pass = ""; renderMain(); } })),
+    h("label", { class: "field" }, "Or paste setup text", h("textarea", { class: "pastebox", rows: "3", "data-imp": "paste", placeholder: "Paste the text copied on your other machine", oninput: (e) => { const v = e.target.value.trim(); im.text = v; im.name = "The pasted text"; const was = im.needPass; im.needPass = /"keys":\s*\{/.test(v); if (was !== im.needPass) renderMain(); } })),
     im.text ? h("p", { class: "note" }, `${im.name} is ready to import.`) : null,
     im.needPass ? h("label", { class: "field" }, "Passphrase for the keys in this file", h("input", { type: "password", autocomplete: "off", value: im.pass, "data-imp": "pass", oninput: (e) => { im.pass = e.target.value; } })) : null,
     h("div", { class: "dfoot left" }, h("button", { class: "btn primary", "data-act": "import", disabled: im.text ? null : true, onclick: importNow }, "Import")),

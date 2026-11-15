@@ -318,3 +318,15 @@ test("Move setup: export asks for a passphrase when keys are included; the file 
   const ip = u.$("[data-imp='pass']"); ip.value = "open sesame"; ip.dispatchEvent(new u.win.Event("input", { bubbles: true })); u.$("[data-act='import']").click(); await wait(500);
   assert.equal(u.engine.settings.miniflux.token, "good-key"); t.close(); u.close();
 });
+
+test("Move setup: setup text can be copied and pasted into another machine, with the passphrase", async () => {
+  const t = await mount(); await openMove(t); let copied = null;
+  Object.defineProperty(t.win.navigator, "clipboard", { value: { writeText: async (x) => { copied = x; } }, configurable: true }); Object.defineProperty(globalThis, "navigator", { value: t.win.navigator, configurable: true });
+  const keysBox = t.$("[data-exp='keys']"); keysBox.checked = true; keysBox.dispatchEvent(new t.win.Event("change", { bubbles: true })); await wait(40);
+  const pw = t.$("[data-exp='pass']"); pw.value = "pw1"; pw.dispatchEvent(new t.win.Event("input", { bubbles: true }));
+  t.$("[data-act='copy-text']").click(); await wait(300); assert.ok(copied && JSON.parse(copied).format === "pravaha-settings"); assert.ok(!copied.includes("good-key"));
+  const u = await mount({ noToken: true }); await openMove(u);
+  const box = u.$("[data-imp='paste']"); box.value = copied; box.dispatchEvent(new u.win.Event("input", { bubbles: true })); await wait(80);
+  const ip = u.$("[data-imp='pass']"); assert.ok(ip, "a passphrase box appears for pasted text with keys"); ip.value = "pw1"; ip.dispatchEvent(new u.win.Event("input", { bubbles: true }));
+  u.$("[data-act='import']").click(); await wait(500); assert.equal(u.engine.settings.miniflux.token, "good-key"); t.close(); u.close();
+});

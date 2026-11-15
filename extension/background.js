@@ -48,7 +48,8 @@ async function runSync(opts) {
   try { await engine.syncNow(opts); } finally { syncing = false; }
 }
 
-browser.alarms.onAlarm.addListener(async (a) => { if (a.name === "poll") { await ready; await runSync({ quiet: true }); } });
+// Firefox may not wake this page when Sync delivers data, so every poll also looks at Firefox Sync's storage (a local read, no network).
+browser.alarms.onAlarm.addListener(async (a) => { if (a.name === "poll") { await ready; try { await profile.pull(); } catch { /* shown on the Move setup tab */ } await runSync({ quiet: true }); } });
 browser.runtime.onInstalled.addListener(async () => { await ready; await schedule(); });
 browser.runtime.onStartup.addListener(async () => { await ready; await runSync(); });
 browser.action.onClicked.addListener(async () => {

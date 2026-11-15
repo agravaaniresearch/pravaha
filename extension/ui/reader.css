@@ -383,3 +383,5 @@ mark { background: color-mix(in srgb, var(--amber) 55%, transparent); color: inh
 .hero.setup .route h3 { margin: 0 0 4px; font-size: 14px; }
 .hero.setup .route p { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
 .note.bad { color: var(--bad, #d9604b); }
+
+.pastebox{width:100%;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text);resize:vertical}

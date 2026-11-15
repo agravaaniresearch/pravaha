@@ -72,6 +72,8 @@ export class ProfileSync {
   // Writes the named parts, or with no names the parts that differ from what was last sent. Never sends keys that are empty.
   async push(parts = null, { force = false } = {}) {
     this.lastError = null; const sent = []; const skipped = [];
+    // A machine with no keys has nothing worth sharing, and writing its defaults could overwrite a good setup waiting in Firefox Sync.
+    if (!hasKeys(this.s)) return { sent, skipped, idle: true };
     for (const part of parts || PARTS) {
       if (!toggleOf(this.s, part)) continue;
       if (part === "keys" && !hasKeys(this.s)) continue;
@@ -101,7 +103,7 @@ export class ProfileSync {
   async summary() {
     let remote = {}; let readable = true; try { remote = await this._remote(); } catch { readable = false; }
     return {
-      readable, error: this.lastError, lastPulledAt: this.lastPulledAt, lastApplied: this.lastApplied,
+      readable, device: this.s.device, error: this.lastError, lastPulledAt: this.lastPulledAt, lastApplied: this.lastApplied,
       keys: { on: toggleOf(this.s, "keys") }, settings: { on: toggleOf(this.s, "settings") },
       parts: PARTS.map(p => { const r = remote[p]; const m = this._meta(p); return { part: p, remote: r ? { at: r.at, by: r.by } : null, local: m.at || null, state: !r ? "absent" : r.at > m.at ? "remote-newer" : r.at < m.at ? "local-newer" : "level" }; })
     };

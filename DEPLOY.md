@@ -39,9 +39,10 @@ Open Settings in the reader.
 
 A machine with no keys shows "Set up this machine" at the top of Settings with three routes. Everything arrives in the same order: keys, then articles from Miniflux, then reading history from the WebDAV storage (the toast and the Sync page show how many events were read).
 
-1. **Firefox Sync.** On the first machine open Settings, Move setup and press Send (it also sends by itself). On the new machine sign in to Firefox Sync with Add-ons ticked, install Pravaha, and wait. Firefox delivers in the background, usually within minutes; Check Firefox Sync now looks at once. Keys, settings, folder order and look arrive; the machine name does not.
+1. **Firefox Sync.** On the first machine open Settings, Move setup and press Send (it also sends by itself). On the new machine sign in to Firefox Sync with Add-ons ticked (Mozilla documents this as required for any extension's synced storage), install Pravaha, and wait. Firefox sends extension data about every 10 minutes, so for an immediate result choose Sync Now in Firefox (the account icon, or Settings, Sync) on the sending machine first and then on the receiving machine. Pravaha looks at Firefox Sync's storage at every poll and whenever the reader tab comes to the front; Check Firefox Sync now looks at once. On the Move setup tab, "Written on this machine" means Firefox has not yet sent that part, and "Arrived" means it came from another machine. Keys, settings, folder order and look arrive; the machine name does not.
 2. **Settings file.** Settings, Move setup, Export. Tick keys and choose a passphrase if you want the keys in the file; tick history to carry it in the file too. On the new machine choose Import and enter the passphrase.
-3. **Type the keys** as in step 4.
+3. **Copy as text.** Settings, Move setup, tick keys, choose a passphrase and press Copy as text instead. Send the text to yourself (a note or a message), then paste it under Import on the new machine. This route needs no Firefox Sync and leaves out the reading history, which arrives from WebDAV once the keys are in.
+4. **Type the keys** as in step 4.
 
 Give each machine its own name. A new install gets a name like `browser-k3x9a`; rename it in Settings, This machine, before the first sync if you prefer. If two installs share a name, the second stops with a plain message and writes nothing.
 

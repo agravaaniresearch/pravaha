@@ -49,6 +49,7 @@ test("the two toggles stop sending and receiving, and an unconfigured machine ne
   const px = new ProfileSync({ engine: x, area: a, now: c.now }); await px.push();
   assert.ok(!a.m.has("pv:keys") && a.m.has("pv:settings"));
   const e = await blank(w, "e", { keys: false }); const pe = new ProfileSync({ engine: e, area: a, now: c.now }); const r = await pe.push(); assert.ok(!r.sent.includes("keys")); assert.ok(!a.m.has("pv:keys"));
+  const before = JSON.stringify([...a.m]); await e.saveSettings({ pollMinutes: 3, ui: { theme: "light" } }); const r2 = await pe.push(null, { force: true }); assert.deepEqual(r2.sent, [], "a machine with no keys writes nothing at all, not even its look"); assert.equal(JSON.stringify([...a.m]), before);
   a.m.set("pv:keys", { v: 1, at: 9e9, by: "z", data: { miniflux: { url: "https://q", token: "t" } } });
   await e.saveSettings({ sync: { keys: false, settings: true } }); await pe.pull(); assert.equal(e.settings.miniflux.token, "", "keys toggle off means keys are not taken");
 });

@@ -112,7 +112,7 @@ Four items, each `{ v: 1, at: <ms>, by: <machine name>, data }`. The newest `at`
 | `pv:order` | `treeOrder` |
 | `pv:ui` | `settings.ui` |
 
-Pulls happen at start-up and on every `storage.onChanged` for a `pv:` key. A machine that has never held a key never writes. Taking keys starts a sync at once.
+Pulls happen at start-up and on every `storage.onChanged` for a `pv:` key. A machine that holds no key never writes any part (`push` returns `idle`). Every alarm poll and every time the reader tab becomes visible also runs a pull, because Firefox does not promise to wake an event page when Sync delivers data. Firefox itself sends extension data about every 10 minutes or at Sync Now. Taking keys starts a sync at once.
 
 ### Settings file
 
