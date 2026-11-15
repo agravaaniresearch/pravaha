@@ -385,7 +385,7 @@ const setVal = (t, el, v) => { el.value = v; el.dispatchEvent(new t.win.Event("i
 test("Feeds tab lists every feed with its health, filters by name, and shows only feeds in trouble on request", async () => {
   const t = await mount(); await openFeeds(t);
   assert.deepEqual(t.$$(".frow .ftitle").map(e => e.textContent).sort(), ["Broken Feed", "Kitchen Daily", "Naval Wire"]);
-  assert.match(t.$("[data-fsum]").textContent, /3 feeds/);
+  assert.match(t.$("[data-fsum]").textContent, /3 feeds/); assert.ok(!/null|undefined/.test(t.$("[data-flist]").textContent), "no stray null text under the list");
   setVal(t, t.$("[data-field='feed-filter']"), "naval"); assert.deepEqual(t.$$(".frow .ftitle").map(e => e.textContent), ["Naval Wire"]);
   setVal(t, t.$("[data-field='feed-filter']"), "defence"); assert.deepEqual(t.$$(".frow .ftitle").map(e => e.textContent), ["Naval Wire"], "the folder name is searched too");
   setVal(t, t.$("[data-field='feed-filter']"), ""); const p = t.$("[data-field='feed-problems']"); p.checked = true; p.dispatchEvent(new t.win.Event("change", { bubbles: true }));

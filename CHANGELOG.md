@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- Fixed: the Feeds tab showed the word "null" under the list of feeds. The list is now built without it, and a test checks for stray text.
+
 ## 0.6.0
 
 Everything below was measured on a synthetic library (541 sidebar rows, 1,260 articles) in real Firefox 160 with the probes in `tools/firefox-e2e/`, or in Node against fakes. They are headless benchmarks on invented data: they show the direction and size of a change, not the speed of your own library on your machine.

@@ -1194,8 +1194,9 @@ function fillFeedList() {
   if (!all) { box.replaceChildren(h("p", { class: "note" }, "Reading your feeds.")); return; }
   const q = (S.fq || "").trim().toLowerCase(); const list = all.filter(f => feedMatches(f, q, S.fprob)).sort((a, b) => (a.category + "\u0001" + a.title).localeCompare(b.category + "\u0001" + b.title));
   const shown = list.slice(0, S.fpage * FEED_PAGE);
-  box.replaceChildren(...(shown.length ? shown.map(feedRow) : [h("p", { class: "note" }, all.length ? "No feed matches." : "No feeds yet. Add one with the plus button in the sidebar.")]),
-    list.length > shown.length ? h("button", { class: "btn", "data-act": "feeds-more", onclick: () => { S.fpage++; fillFeedList(); } }, `Show ${Math.min(FEED_PAGE, list.length - shown.length)} more`) : null);
+  const kids = shown.length ? shown.map(feedRow) : [h("p", { class: "note" }, all.length ? "No feed matches." : "No feeds yet. Add one with the plus button in the sidebar.")];
+  if (list.length > shown.length) kids.push(h("button", { class: "btn", "data-act": "feeds-more", onclick: () => { S.fpage++; fillFeedList(); } }, `Show ${Math.min(FEED_PAGE, list.length - shown.length)} more`));
+  box.replaceChildren(...kids);
   if (sum) { const bad = all.filter(f => f.state !== "green" || f.disabled).length; sum.textContent = `${all.length} feed${all.length === 1 ? "" : "s"}${bad ? `, ${bad} with trouble or disabled` : ""}`; }
 }
 function feedsMain() {
