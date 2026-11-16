@@ -1,7 +1,7 @@
 // Small DOM helpers. Text is always inserted as text nodes, never as HTML.
 const NS = "http://www.w3.org/2000/svg";
 const PATHS = {
-  chev: "M9 6l6 6-6 6", star: "M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z", x: "M6 6l12 12M18 6L6 18", down: "M6 9l6 6 6-6",
+  chev: "M9 6l6 6-6 6", flame: "M12 3c1 3 4 5 4 9a4 4 0 01-8 0c0-2 1-3 2-4 0 2 1 3 2 3 0-3-1-5 0-8z", star: "M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z", x: "M6 6l12 12M18 6L6 18", down: "M6 9l6 6 6-6",
   search: "M11 4a7 7 0 100 14 7 7 0 000-14zM21 21l-5-5", ext: "M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5",
   list: "M4 6h16M4 12h16M4 18h10", bolt: "M13 3L5 14h6l-1 7 8-11h-6z", chart: "M4 20V10M10 20V4M16 20v-8M22 20H2",
   sync: "M4 12a8 8 0 0113.7-5.7L20 8M20 4v4h-4M20 12a8 8 0 01-13.7 5.7L4 16M4 20v-4h4",

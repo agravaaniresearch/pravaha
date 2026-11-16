@@ -1,8 +1,8 @@
 // The engine: owns state, talks to Miniflux, Raindrop and WebDAV, scores items, records events.
 // Nothing here touches browser globals directly; the background page injects everything.
 import { tokenize, stem, domainOf, firstParagraph, wordCount, canonicalUrl } from "./text.js";
-import { Corpus, cosine, blend, mean, prune, topTerms } from "./vector.js";
-import { scoreItem, DEFAULT_WEIGHTS, normaliseWeights, whyRanked, authorityOf } from "./scoring.js";
+import { Corpus, cosine, mean, prune, topTerms } from "./vector.js";
+import { scoreItem, DEFAULT_WEIGHTS, normaliseWeights, whyRanked, feedStanding, standingOf, mixProfile, hotness, exposurePayload } from "./scoring.js";
 import { EventLog, Clock, derive, parseTs } from "./eventlog.js";
 import { Syncer, freshSyncState } from "./sync.js";
 import { WebDav, PlainError } from "./webdav.js";
@@ -82,7 +82,7 @@ export class Engine {
     this.log.merge(s.eventsTail || []);
     this._saved.events = this._eventsSig(); this._saved.cache = s.cache ? hashStr(cacheJson(this.cache)) : null;
     this.syncState = s.syncState || freshSyncState(); this.server = loadServer(s.server);
-    this._wire();
+    this._wire(); this._conn = JSON.stringify([this.settings.miniflux, this.settings.webdav, this.settings.raindrop, this.settings.device]);
     this._invalidate();
     if (fresh) await this.persist(["settings"]);
   }
@@ -135,13 +135,20 @@ export class Engine {
       const events = this.log.list(); this.log = new EventLog(this.settings.device, new Clock(this.settings.device, this.now)); this.log.merge(events);
       this.syncState = freshSyncState(); this._saved.ownSeq = 0; this._saved.events = null;
     }
-    this._wire(); this._invalidate(); await this.persist(this.settings.device !== prevDevice ? ["settings", "syncState", "events"] : ["settings"], { immediate: true }); this._notify();
+    // Only a change of connection or machine name rebuilds the clients; a theme or order change keeps them (and their learned shortcuts).
+    const conn = JSON.stringify([this.settings.miniflux, this.settings.webdav, this.settings.raindrop, this.settings.device]);
+    if (conn !== this._conn) { this._conn = conn; this._wire(); }
+    if (patch.raindrop || this.settings.device !== prevDevice) this._invalidate();
+    await this.persist(this.settings.device !== prevDevice ? ["settings", "syncState", "events"] : ["settings"], { immediate: true }); this._notify();
   }
   // _invalidate: the vocabulary may have changed (new Raindrop copy, new echo, settings), so everything derived from text is rebuilt.
-  _invalidate() { this._base = null; this._model = null; this._derived = null; this._vecs.clear(); }
+  _invalidate() { this._base = null; this._model = null; this._derived = null; this._hot = null; this._vecs.clear(); }
 
   // ---------- model ----------
-  _derive() { if (!this._derived) this._derived = derive(this.log.list(), this.now()); return this._derived; }
+  _derive() {
+    if (!this._derived) { const ev = this.log.list(), now = this.now(); this._derived = derive(ev, now); this._derived.standing = feedStanding(ev, now); }
+    return this._derived;
+  }
   // The expensive part (vocabulary, one vector per Raindrop save, tag profiles) is built once per Raindrop copy.
   // The interest profile and the echo are cheap and are rebuilt whenever the history changes.
   _buildBase() {
@@ -157,15 +164,17 @@ export class Engine {
     const vecs = toks.map(t => corpus.vector(t));
     const weights = bms.map(b => Math.pow(0.5, Math.max(0, now - (b.at || now)) / (365 * DAY)));
     const bmByUrl = new Map(); bms.forEach((b, i) => { const c = canonicalUrl(b.link); if (c && !bmByUrl.has(c)) bmByUrl.set(c, i); });
-    this._base = { corpus, fromItems, baseCentroid: prune(mean(vecs, weights), 500), profiles: buildTagProfiles(bms, corpus), bms, bmVecs: vecs, bmByUrl };
+    this._base = { corpus, fromItems, baseCentroid: prune(mean(vecs, weights), 500), profiles: buildTagProfiles(bms, corpus), bms, bmVecs: vecs, bmByUrl, pullVecs: new Map() };
     return this._base;
   }
   _buildModel() {
     if (this._model) return this._model;
     const b = this._buildBase(); const corpus = b.corpus;
-    let centroid = b.baseCentroid;
+    // The interest profile: your Raindrop saves, plus what you opened, saved and thumbed up, which can never take more than 30 percent of it
+    // and fades with a 60-day half life. (0.7.0 blended each action in turn, so a hundred opens erased the saves.)
     const d = this._derive();
-    for (const p of d.pulls) centroid = blend(centroid, corpus.vector(p.terms), p.kind === "save" ? 0.12 : p.kind === "up" ? 0.08 : p.kind === "card" ? 0.02 : 0.05);
+    const pv = (terms) => { const k = terms.join(" "); let v = b.pullVecs.get(k); if (!v) { v = corpus.vector(terms); b.pullVecs.set(k, v); } return v; };
+    const centroid = mixProfile(b.baseCentroid, d.pulls.filter(p => Array.isArray(p.terms)).map(p => ({ kind: p.kind, at: p.at, vec: pv(p.terms) })), this.now());
     const echo = this._echoMerged(corpus);
     this._model = { ...b, centroid, echo: echo.vec, domainVisits: echo.domainVisits };
     return this._model;
@@ -188,12 +197,19 @@ export class Engine {
   _pruneVecs() { for (const id of this._vecs.keys()) if (!this.cache.items[id]) this._vecs.delete(id); }
   _scoreCtx() {
     const m = this._buildModel(), d = this._derive();
-    return { weights: normaliseWeights(this.settings.weights), centroid: m.centroid, echo: m.echo, domainVisits: m.domainVisits, authorityDelta: d.authorityDelta,
-      training: d.training, story: d.story, tagRules: d.training.some(r => r.type === "tag"), now: this.now(), sessionFeeds: this.sessionFeeds, novelty: this.settings.novelty, enrichment: this.enrichment, cosine };
+    return { weights: this.settings.weights, centroid: m.centroid, echo: m.echo, domainVisits: m.domainVisits, authorityDelta: d.authorityDelta, standing: d.standing, profiles: m.profiles, hot: this._hotMap(),
+      training: d.training, story: d.story, tagRules: d.training.some(r => r.type === "tag"), now: this.now(), sessionFeeds: this.sessionFeeds, novelty: this.settings.novelty, enrichment: this.enrichment };
+  }
+  // Fever-style heat: the same story carried by several feeds within a day and a half. Worked out once per refresh over the recent articles.
+  _hotMap() {
+    if (this._hot) return this._hot;
+    const cut = this.now() - 3 * DAY; const list = [];
+    for (const it of Object.values(this.cache.items)) if (it.publishedAt > cut) { const v = this._itemVec(it); list.push({ id: it.id, feedId: it.feedId, publishedAt: it.publishedAt, vec: v.vec, stems: v.stems }); }
+    this._hot = hotness(list); return this._hot;
   }
   scoreOne(it, ctx = this._scoreCtx()) {
     const v = this._itemVec(it);
-    return scoreItem({ id: it.id, feedId: it.feedId, vec: v.vec, stems: v.stems, domain: it.domain, publishedAt: it.publishedAt, author: it.author, tags: ctx.tagRules ? this._itemTags(it) : it.tags }, ctx);
+    return scoreItem({ id: it.id, feedId: it.feedId, vec: v.vec, stems: v.stems, domain: it.domain, publishedAt: it.publishedAt, seenAt: it.seenAt, author: it.author, tags: ctx.tagRules ? this._itemTags(it) : it.tags }, ctx);
   }
   // The tags a tag rule can match: the ones the feed sent, the tags of your own Raindrop save of this very page, and the tags suggested from your Raindrop vocabulary.
   // Worked out only while at least one tag rule exists, and kept per article until the next refresh.
@@ -211,7 +227,7 @@ export class Engine {
     const feed = e.feed || {};
     return { ...prev, id: e.id, feedId: e.feed_id || feed.id, feedTitle: feed.title || prev.feedTitle || "Unknown feed",
       category: (feed.category && feed.category.title) || prev.category || "Uncategorised",
-      title: e.title || "(untitled)", summary: firstParagraph(e.content, 320), publishedAt: Date.parse(e.published_at) || prev.publishedAt || 0,
+      title: e.title || "(untitled)", summary: firstParagraph(e.content, 320), publishedAt: Date.parse(e.published_at) || prev.publishedAt || 0, seenAt: Date.parse(e.created_at) || prev.seenAt || 0,
       author: e.author || null, url: e.url, domain: domainOf(e.url), tags: e.tags || [], status: e.status, starred: !!e.starred, readingTime: e.reading_time || 0,
       words: e.content ? wordCount(e.content) : (prev.words || 0), thumb: (/<img[^>]+src=["'](https:\/\/[^"']{1,300})["']/i.exec(e.content || "") || [])[1] || prev.thumb || null,
       media: mediaKind(e.enclosures) || prev.media || null, comments: e.comments_url || prev.comments || null };
@@ -363,7 +379,7 @@ export class Engine {
   // The feed list (names, folders, health) changes rarely and is the largest routine answer, so a quiet poll reads it every fifteen minutes,
   // and at once when an article names a feed this machine does not know yet.
   _feedsDue(force) { return force || !this.cache.feeds.length || this.now() - (this.marks.feedsAt || 0) > FEEDS_EVERY_MS; }
-  async refresh({ feeds = true } = {}) {
+  async refresh({ feeds = false } = {}) {
     if (!this.mf) return;
     const col = collector(); this.mf.stats.calls = 0; this.mf.stats.bytes = 0; let mode = "full";
     try {
@@ -386,7 +402,7 @@ export class Engine {
       const known = new Set(this.cache.feeds.map(f => f.id)); if (Object.values(this.cache.items).some(it => it.status === "unread" && !known.has(it.feedId))) { this._applyFeeds(await this.mf.feeds(), col); this.marks.feedsAt = this.now(); }
       this._retain(); this._reindex();
       if (this.pendingOps.length) await this.flushOps();
-      this._netOk("miniflux"); if (this._base && this._base.fromItems) this._invalidate();
+      this._netOk("miniflux"); this._hot = null; if (this._base && this._base.fromItems) this._invalidate();
       this.net.miniflux = { ...this.net.miniflux, mode, calls: this.mf.stats.calls, bytes: this.mf.stats.bytes };
     } catch (e) { this._netErr("miniflux", e); }
     col.done(this.server, this.now()); this._actEnd("pull");
@@ -396,6 +412,19 @@ export class Engine {
     const cut = this.now() - this.settings.retentionDays * DAY; const d = this._derive();
     for (const it of Object.values(this.cache.items))
       if (it.status === "read" && !it.starred && !d.opens.has(it.id) && !d.cards.has(it.id) && it.publishedAt < cut) delete this.cache.items[it.id];
+  }
+
+  // Once a day, how many articles each feed published on each of the last few whole days (UTC), as a "calibration" event.
+  // Feed standing divides what you engaged with by this, so a feed that publishes a hundred a day cannot rank on volume.
+  // Two machines may log the same day; standing takes the larger count per feed and day, so the result does not depend on who logged it.
+  _logExposure() {
+    if (!this.mf || !this.cache.feeds.length) return;
+    const today = Math.floor(this.now() / DAY) * DAY; const last = this.marks.exposureDay || 0; let wrote = false;
+    for (let d = Math.max(last + DAY, today - 3 * DAY); d < today; d += DAY) {
+      const p = exposurePayload(Object.values(this.cache.items), d); if (p && Object.keys(p.feeds).length) { this.log.append("calibration", { payload: p }); wrote = true; }
+    }
+    if (last < today - DAY || !last) this.marks.exposureDay = today - DAY;
+    if (wrote) { this._derived = null; this._model = null; this.persist(["events", "marks"]).catch(() => {}); }
   }
 
   // ---------- Raindrop and echo ----------
@@ -412,7 +441,9 @@ export class Engine {
   async refreshEcho(force = false) {
     if (!this.platform.echoDocs) return;
     if (!force && this.echoLocal && this.now() - this.echoLocal.at < DAY) return;
-    const docs = await this.platform.echoDocs(90); // [{title,url,visits}]
+    // Pages you opened from Pravaha already count through standing and the profile, so they are left out here (counted once, not three times).
+    const mine = new Set(); const d0 = this._derive(); for (const id of d0.opens.keys()) { const it = this.cache.items[id]; if (it) mine.add(canonicalUrl(it.url)); }
+    const docs = (await this.platform.echoDocs(90)).filter(x => !mine.has(canonicalUrl(x.url))); // [{title,url,visits}]
     const corpus = this._buildModel().corpus; const domainCounts = {}; const vecs = [], w = [];
     for (const d of docs) {
       const dom = domainOf(d.url); if (dom) domainCounts[dom] = (domainCounts[dom] || 0) + (d.visits || 1);
@@ -427,7 +458,8 @@ export class Engine {
     const before = quiet ? this.signature() : null;
     if (quiet) { this._muted = true; this._mutedAt = this.now(); this._heldChange = false; }
     try {
-      await this.refresh();
+      await this.refresh({ feeds: !quiet });
+      this._logExposure();
       await this.refreshIcons();
       await this.refreshRaindrop();
       await this.refreshEcho();
@@ -706,7 +738,7 @@ export class Engine {
       if (title) { const c = await this.mf.createCategory(title); cid = c.id; }
       if (!cid) { const all = await this.mf.categories(); cid = (all && all[0] && all[0].id) || 1; }
       const r = await this.mf.createFeed({ feed_url: feedUrl, category_id: cid }); this._netOk("miniflux");
-      await this.refresh();
+      await this.refresh({ feeds: true });
       const f = this.cache.feeds.find(x => x.id === r.feed_id);
       return { ok: true, feedId: r.feed_id, title: f ? f.title : "the feed", sentence: `Subscribed to ${f ? f.title : "the feed"}.` };
     } catch (e) { this._netErr("miniflux", e); return { ok: false, sentence: e instanceof PlainError ? e.plain : "Subscribing failed for an unexpected reason." }; }
@@ -810,7 +842,7 @@ export class Engine {
     } finally { this._actEnd("manage"); }
   }
   _later(ms) {
-    const t = setTimeout(async () => { this._timers.delete(t); try { await this.refresh(); this._notify(); } catch { /* shown on the Sync page */ } }, ms);
+    const t = setTimeout(async () => { this._timers.delete(t); try { await this.refresh({ feeds: true }); this._notify(); } catch { /* shown on the Sync page */ } }, ms);
     if (t && t.unref) t.unref(); this._timers.add(t);
   }
   // Ask Miniflux to fetch now, then bring in what arrived. A feed is fetched while Pravaha waits; a folder is fetched by Miniflux in the background, so Pravaha looks again a little later.
@@ -821,7 +853,7 @@ export class Engine {
       const before = Object.keys(this.cache.items).length; const s = String(scope || "all");
       if (s.startsWith("feed:")) {
         const f = this.cache.feeds.find(x => x.id === Number(s.slice(5))); if (!f) return { ok: false, sentence: "That feed is no longer in the list." };
-        await this.mf.refreshFeed(f.id); setCap(this.server, "feedRefresh", true); await this.refresh(); this._notify();
+        await this.mf.refreshFeed(f.id); setCap(this.server, "feedRefresh", true); await this.refresh({ feeds: true }); this._notify();
         const n = Object.keys(this.cache.items).length - before; return { ok: true, sentence: n > 0 ? `Fetched “${f.title}”: ${n} new article${n === 1 ? "" : "s"}.` : `Fetched “${f.title}”: nothing new.` };
       }
       if (s.startsWith("cat:")) {
@@ -992,10 +1024,10 @@ export class Engine {
       if (e.type === "open") opens++; else if (e.type === "card") cards++; else if (e.type === "dismiss") dismisses++; else if (e.type === "dwell") dwellMs += (e.payload && e.payload.ms) || 0;
       else if (e.type === "save") { saves++; const c = splitCategory((meta[e.feed] && meta[e.feed].category) || "Other")[0]; cat[c] = (cat[c] || 0) + 1; }
     }
-    const bands = [[0, .15], [.15, .3], [.3, .45], [.45, 1.01]].map(([lo, hi]) => ({ lo, hi: Math.min(hi, 1), n: 0, opened: 0, saved: 0 }));
+    const bands = [[0, .3], [.3, .45], [.45, .6], [.6, 1.01]].map(([lo, hi]) => ({ lo, hi: Math.min(hi, 1), n: 0, opened: 0, saved: 0 }));
     const ctx = this._scoreCtx();
     for (const it of Object.values(this.cache.items)) { const s = this.scoreOne(it, ctx).score; const b = bands.find(x => s >= x.lo && s < x.hi) || bands[3]; b.n++; if (d.opens.has(it.id)) b.opened++; if (it.starred) b.saved++; }
-    const league = this.cache.feeds.map(f => ({ id: f.id, title: f.title, authority: authorityOf(d.authorityDelta[f.id] || 0), health: f.health.state }))
+    const league = this.cache.feeds.map(f => ({ id: f.id, title: f.title, authority: standingOf(d.standing, f.id), health: f.health.state }))
       .sort((a, b) => b.authority - a.authority).slice(0, 12);
     return { opens, cards, saves, dismisses, dwellMinutes: Math.round(dwellMs / 60000), savesByFolder: Object.entries(cat).sort((a, b) => b[1] - a[1]), bands, league, pendingHistory: this.pendingHistory };
   }
@@ -1006,7 +1038,7 @@ export class Engine {
     const top = sc.filter(x => now - x.it.publishedAt < 7 * DAY).sort((a, b) => b.s.score - a.s.score).slice(0, 15).map(x => { const rd = (this.trainerFor(x.it.id) || {}).raindrop || {}; const because = rd.exact ? "saved in Raindrop" : rd.related && rd.related[0] ? `close to your Raindrop save “${rd.related[0].title}”` : ""; return { ...x.it, score: x.s.score, because }; });
     const saved = Object.values(this.cache.items).filter(i => i.starred && now - i.publishedAt < 14 * DAY).map(i => ({ ...i, tags: this.suggestTagsFor(i.id).map(t => t.tag) }));
     const meta = this._feedMeta();
-    const authority = Object.entries(d.authorityDelta).map(([id, v]) => ({ title: (meta[id] && meta[id].title) || id, value: authorityOf(v) })).sort((a, b) => b.value - a.value);
+    const authority = Object.keys(d.standing).filter(id => id !== "_mean").map(id => ({ title: (meta[id] && meta[id].title) || id, value: standingOf(d.standing, id) })).sort((a, b) => b.value - a.value);
     const terms = topTerms(this._buildModel().centroid, 15);
     const label = (r) => r.type === "tag" ? "#" + r.key.replace(/\s+/g, "-") : r.type === "feed" ? ((meta[r.key] && meta[r.key].title) || "a feed") : r.key;
     const trained = { more: d.training.filter(r => r.value > 0).map(label).slice(0, 12), less: d.training.filter(r => r.value < 0).map(label).slice(0, 12) };

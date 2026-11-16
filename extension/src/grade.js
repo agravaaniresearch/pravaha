@@ -1,7 +1,9 @@
-// Colour grading for relevance. Raw scores rarely pass 0.65, so the display is stretched: 65 raw is a full bar.
-export const DISPLAY_SCALE = 0.65;
+// Colour grading for relevance. 0.8.0: a gentle odds stretch instead of score/0.65 clipped at 1, so the top of the list
+// stays distinguishable (the reworked engine scores higher than 0.7.0 did). Strictly increasing; never clips.
+import { displayOf } from "./scoring.js";
+export const DISPLAY_ODDS = 1.25;
 const num = (x) => (Number.isFinite(x) ? x : 0);
-export const disp = (score) => Math.min(1, Math.max(0, num(score)) / DISPLAY_SCALE);
+export const disp = (score) => displayOf(num(score), DISPLAY_ODDS);
 const PALETTES = {
   ember: ["#ecdcb8", "#f2b84b", "#e08a00", "#a8480f"],
   saffron: ["#f0e8c8", "#f4d35e", "#f0a202", "#c75b00"],

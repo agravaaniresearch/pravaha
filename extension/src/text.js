@@ -1,4 +1,5 @@
-// Tokenising and light stemming. No dependencies, deterministic.
+// Tokenising and light stemming. Deterministic.
+import { prepText } from "./scoring.js";
 const STOP = new Set(("a about above after again against all also am an and any are as at be because been before being below between both but by can could did do does doing down during each few for from further had has have having he her here hers him his how i if in into is it its just me more most my no nor not now of off on once only or other our out over own same she should so some such than that the their them then there these they this those through to too under until up us very was we were what when where which while who whom why will with would you your said says say new one two also may might still per via").split(/\s+/));
 
 export function stem(w) {
@@ -15,7 +16,8 @@ export function stem(w) {
 
 export function tokenize(text) {
   if (!text) return [];
-  const raw = String(text).toLowerCase().replace(/<[^>]*>/g, " ").split(/[^\p{L}\p{N}]+/u);
+  // prepText decodes entities and keeps designators such as F-35 and S-400 whole, so they survive the filters below.
+  const raw = prepText(String(text)).toLowerCase().replace(/<[^>]*>/g, " ").split(/[^\p{L}\p{N}]+/u);
   const out = [];
   for (const t of raw) {
     if (t.length < 2 || STOP.has(t) || /^\d+$/.test(t)) continue;

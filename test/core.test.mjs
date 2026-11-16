@@ -69,14 +69,16 @@ test("external enrichment blends 0.8 local plus 0.2 external", () => {
 });
 test("normaliseWeights sums to one and whyRanked speaks plain prose", () => {
   const w = normaliseWeights({ tag: 2, echo: 1, authority: 1, freshness: 0 });
-  assert.ok(Math.abs(w.tag + w.echo + w.authority + w.freshness - 1) < 1e-9);
+  assert.ok(Math.abs(w.tag + w.echo + w.authority + w.freshness + w.hot - 1) < 1e-9, "0.8.0: five weights, a stored four-weight object gets the default for hot");
+  assert.ok(w.hot > 0 && w.freshness === 0);
   assert.match(whyRanked({ tagOverlap: .9, bookmarkEcho: 0, feedAuthority: .1, freshness: .9, training: .05, noveltyBoost: 1 }), /close to your saved tags.*skip.*fresh.*training/);
   assert.equal(whyRanked({ tagOverlap: .1, bookmarkEcho: .1, feedAuthority: .3, freshness: .1, training: 0, noveltyBoost: 1 }), "an average match");
 });
 import { gradeColor, disp } from "../extension/src/grade.js";
 test("colour grading: stretched display, monotone darkening, readable text colour, unknown palette falls back", () => {
-  assert.equal(disp(0), 0); assert.equal(disp(0.65), 1); assert.equal(disp(0.9), 1); assert.ok(Math.abs(disp(0.325) - 0.5) < 1e-9);
+  // 0.8.0: an odds stretch that never clips, so the top of the list stays distinguishable
+  assert.equal(disp(0), 0); assert.equal(disp(1), 1); assert.ok(disp(0.9) < 1 && disp(0.9) > disp(0.65)); assert.ok(disp(0.4) > 0.4 && disp(0.4) < 0.5);
   const lum = (c) => { const m = c.bg.match(/\d+/g).map(Number); return 0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2]; };
-  for (const p of ["ember", "saffron", "moss"]) { let prev = Infinity; for (const s of [0, .25, .5, .75, 1]) { const c = gradeColor(s, p); assert.ok(lum(c) <= prev + 1e-9, `${p} ${s}`); prev = lum(c); } }
+  for (const p of ["ember", "saffron", "moss", "kesar", "jade", "sindoor"]) { let prev = Infinity; for (const s of [0, .25, .5, .75, 1]) { const c = gradeColor(s, p); assert.ok(lum(c) <= prev + 1e-9, `${p} ${s}`); prev = lum(c); } }
   assert.equal(gradeColor(0, "ember").fg, "#2b2015"); assert.equal(gradeColor(1, "ember").fg, "#fffaf0"); assert.deepEqual(gradeColor(.5, "nope"), gradeColor(.5, "ember"));
 });

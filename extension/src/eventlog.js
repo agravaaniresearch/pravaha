@@ -19,6 +19,8 @@ export class Clock {
   observe(ts) {
     const r = parseTs(ts); if (!Number.isFinite(r.wall)) return;
     const t = this.now();
+    // A machine whose clock is far ahead must not drag this one into the future (decay would freeze for everyone): adopt at most one day of drift.
+    if (r.wall > t + 86400000) return;
     const m = Math.max(this.wall, r.wall, t);
     if (m === this.wall && m === r.wall) this.counter = Math.max(this.counter, r.counter);
     else if (m === r.wall && m !== this.wall) this.counter = r.counter;
@@ -93,12 +95,12 @@ export function derive(events, now) {
       case "open":
         opens.set(e.entry, (opens.get(e.entry) || 0) + 1);
         bump(e.feed, AUTHORITY_SIGNALS.open, e.ts);
-        if (p.terms) pulls.push({ kind: "open", terms: p.terms });
+        if (p.terms) pulls.push({ kind: "open", terms: p.terms, at: parseTs(e.ts).wall });
         break;
       case "card":
         cards.set(e.entry, (cards.get(e.entry) || 0) + 1);
         bump(e.feed, AUTHORITY_SIGNALS.card, e.ts);
-        if (p.terms) pulls.push({ kind: "card", terms: p.terms });
+        if (p.terms) pulls.push({ kind: "card", terms: p.terms, at: parseTs(e.ts).wall });
         break;
       case "dwell":
         dwell.set(e.entry, (dwell.get(e.entry) || 0) + (p.ms || 0));
@@ -109,19 +111,20 @@ export function derive(events, now) {
       case "read_no_open": bump(e.feed, AUTHORITY_SIGNALS.readNoOpen, e.ts); break;
       case "save":
         saved.set(e.entry, true); bump(e.feed, AUTHORITY_SIGNALS.save, e.ts);
-        if (p.terms) pulls.push({ kind: "save", terms: p.terms });
+        if (p.terms) pulls.push({ kind: "save", terms: p.terms, at: parseTs(e.ts).wall });
         break;
       case "unsave": saved.set(e.entry, false); bump(e.feed, -AUTHORITY_SIGNALS.save, e.ts); break;
       case "order": if (typeof p.scope === "string" && Array.isArray(p.ids)) orders.set(p.scope, { ids: p.ids.map(String), wall: parseTs(e.ts).wall }); break;
       // A thumb on a whole article is stored as a train event of type "story"; it remembers which tag and word rules it set, so it can be undone cleanly.
       case "train":
-        if (p.type === "story") stories.set(String(p.key), { value: p.value, keys: Array.isArray(p.keys) ? p.keys.filter(k => k && typeof k.type === "string" && typeof k.key === "string").slice(0, 12) : [], terms: Array.isArray(p.terms) ? p.terms.slice(0, 16) : null });
-        else trainMap.set(`${p.type}:${p.key}`, { type: p.type, key: p.key, value: p.value });
+        if (!Number.isFinite(p.value)) break; // a damaged rule must not zero every matching article
+        if (p.type === "story") stories.set(String(p.key), { at: parseTs(e.ts).wall, value: p.value, keys: Array.isArray(p.keys) ? p.keys.filter(k => k && typeof k.type === "string" && typeof k.key === "string").slice(0, 12) : [], terms: Array.isArray(p.terms) ? p.terms.slice(0, 16) : null });
+        else trainMap.set(`${p.type}:${p.key}`, { type: p.type, key: p.key, value: Math.max(-3, Math.min(3, p.value)) });
         break;
     }
   }
   const training = [...trainMap.values()].filter(r => r.value !== 0);
-  const story = {}; for (const [k, v] of stories) if (v.value === 1 || v.value === -1) { story[k] = v; if (v.value > 0 && v.terms) pulls.push({ kind: "up", terms: v.terms }); }
+  const story = {}; for (const [k, v] of stories) if (v.value === 1 || v.value === -1) { story[k] = v; if (v.value > 0 && v.terms) pulls.push({ kind: "up", terms: v.terms, at: v.at }); }
   return {
     dismissed: new Set([...dismissed].filter(([, v]) => v).map(([k]) => k)),
     saved: new Set([...saved].filter(([, v]) => v).map(([k]) => k)),

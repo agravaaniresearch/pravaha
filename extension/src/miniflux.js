@@ -7,14 +7,14 @@ export function splitCategory(title) { return String(title || "Uncategorised").s
 export class Miniflux {
   constructor({ baseUrl, token, fetchImpl }) {
     this.base = String(baseUrl || "").replace(/\/+$/, "");
-    this.token = token; this.fetch = fetchImpl || ((...a) => fetch(...a)); this.stats = { calls: 0, bytes: 0 };
+    this.token = token; this.fetch = fetchImpl || ((...a) => fetch(...a)); this.stats = { calls: 0, bytes: 0 }; this.timeoutMs = 30000;
   }
   async call(method, path, body, ms) {
     let res; this.stats.calls++;
     try {
       res = await this.fetch(`${this.base}/v1${path}`, {
         method, headers: { "X-Auth-Token": this.token, "Content-Type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body), signal: deadline(ms)
+        body: body === undefined ? undefined : JSON.stringify(body), signal: deadline(ms || this.timeoutMs)
       });
     } catch (e) {
       if (timedOut(e)) throw new PlainError("Miniflux did not answer in time. The reader keeps the copy saved on this machine and tries again on the next refresh.", "timeout");
