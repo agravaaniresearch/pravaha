@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.2
+
+- **Fixed: 0.8.1 could not reach Miniflux, WebDAV or Raindrop from the background.** 0.8.1 added a request counter for the health tile that called a fetch function the background page never passes, so every sync request failed while the Test buttons (which run in the reader tab) still worked. The counter now falls back to the browser's own fetch. A test builds the engine exactly as the background does, and real Firefox 160 reaches the fake servers again.
+- **Fixed: too many large writes while reading.** The health tile was right: each article you read rewrote the article copy (about a megabyte) 1.2 seconds later, about 20 MB an hour during heavy reading. The large keys now wait a minute and are written at the next poll or when Firefox unloads the page, so a reading burst costs one write. Your changes stay safe meanwhile, because the queue for Miniflux and the newest history lines are still written at once.
+- The health tile no longer turns amber when a poll writes changes that your own reading left waiting.
+- The one-time switch-off of Pravaha's own Raindrop save is now saved to disk at once.
+
 ## 0.8.1
 
 - **Training rules are tidy.** On the Stats page the rules now sit in one collapsed line that gives the count ("24 rules: 18 more, 6 less"). Opened, they are grouped into More and Less as small chips, each with an × to remove it, and a filter box appears once there are more than twelve.

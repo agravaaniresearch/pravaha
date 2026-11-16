@@ -43,7 +43,9 @@ const QUIET_MS = 1500;
 // writes nothing at all. Durability does not depend on the delay: changes for Miniflux wait in pendingOps (small, written at once),
 // and this machine's newest history lines are written at once as a short tail.
 const HEAVY = new Set(["cache", "events", "searchIndex"]);
-const DEFER_MS = 1200;
+// 0.8.1 fix: 1.2 s meant one multi-megabyte write per article read. Durability does not need it (pendingOps and the history tail are
+// written at once), so the heavy keys wait a minute, and every poll and every unload of the background page writes them anyway.
+const DEFER_MS = 60000;
 const FEEDS_EVERY_MS = 15 * 60000;
 const cacheJson = (c) => JSON.stringify(c, (k, v) => (k === "lastChangeTs" ? undefined : v)); // the poll cursor lives in "marks"
 const hashStr = (str) => { let h = 2166136261 >>> 0; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + ":" + str.length; };
@@ -64,7 +66,7 @@ export class Engine {
     this.settings.webdav = { ...DEFAULT_SETTINGS.webdav, ...(this.settings.webdav || {}) };
     this.settings.raindrop = { ...DEFAULT_SETTINGS.raindrop, ...(this.settings.raindrop || {}) };
     // 0.8.1: Miniflux's own Raindrop integration now saves articles, so Pravaha's one-way save is switched off once, to avoid duplicates. It can be turned back on.
-    if (!this.settings.rdSave081) { this.settings.saveToRaindrop = false; this.settings.rdSave081 = true; }
+    if (!this.settings.rdSave081) { this.settings.saveToRaindrop = false; this.settings.rdSave081 = true; await this.storage.set({ settings: this.settings }); }
     this.settings.weights = { ...DEFAULT_WEIGHTS, ...(this.settings.weights || {}) };
     if (!this.settings.treeOrder || typeof this.settings.treeOrder !== "object") this.settings.treeOrder = {};
     this.settings.sync = { ...DEFAULT_SETTINGS.sync, ...(this.settings.sync || {}) }; this.settings.syncMeta = { ...(this.settings.syncMeta || {}) };
@@ -91,7 +93,7 @@ export class Engine {
     if (fresh) await this.persist(["settings"]);
   }
   _wire() {
-    if (!this._countedFetch) { this._reqs = 0; this._countedFetch = (...a) => { this._reqs++; return this.fetchImpl(...a); }; }
+    if (!this._countedFetch) { this._reqs = 0; this._countedFetch = (...a) => { this._reqs++; return this.fetchImpl ? this.fetchImpl(...a) : fetch(...a); }; } // the background passes no fetchImpl: use the browser's own
     const fetchImpl = this._countedFetch;
     const w = this.settings.webdav;
     this.dav = w.url && w.user && w.pass ? new WebDav({ baseUrl: w.url, user: w.user, pass: w.pass, fetchImpl }) : null;
@@ -491,7 +493,7 @@ export class Engine {
   // ---------- sync ----------
   async syncNow({ quiet = false } = {}) {
     const before = quiet ? this.signature() : null;
-    const t0 = this.now(), w0 = this.health.writes.length ? this.health.writes[this.health.writes.length - 1][0] : 0, r0 = this._reqs || 0; this._pollHeavy = false; const p0 = performance.now();
+    const t0 = this.now(), w0 = this.health.writes.length ? this.health.writes[this.health.writes.length - 1][0] : 0, r0 = this._reqs || 0; this._pollHeavy = false; const p0 = performance.now(); const owed = this._deferred.size > 0; // your own reading left writes waiting: not the poll's doing
     if (quiet) { this._muted = true; this._mutedAt = this.now(); this._heldChange = false; }
     try {
       await this.refresh({ feeds: !quiet });
@@ -521,7 +523,7 @@ export class Engine {
       // The heavy keys first, then the sync record that says which remote history was applied, so a crash in between can only cause a re-read, never a loss.
       this._deferred.add("cache"); this._deferred.add("events"); this._deferred.add("searchIndex"); await this.flushPersist();
       const bytes = this.health.writes.filter(x => x[0] >= t0 && x[0] >= w0).reduce((a, x) => a + x[1], 0);
-      notePoll(this.health, { at: t0, ms: Math.round(performance.now() - p0), reqs: (this._reqs || 0) - r0, bytes, heavy: this._pollHeavy, changed: !quiet || before !== this.signature() });
+      notePoll(this.health, { at: t0, ms: Math.round(performance.now() - p0), reqs: (this._reqs || 0) - r0, bytes, heavy: this._pollHeavy, changed: !quiet || owed || before !== this.signature() });
       await this.persist(["syncState", "others", "pendingHistory", "net", "enrichment", "marks", "pendingOps", "server", "health"]);
     } finally {
       const announce = !quiet || !this._muted || this.signature() !== before; this._muted = false; this._heldChange = false;

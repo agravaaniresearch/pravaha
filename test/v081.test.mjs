@@ -48,3 +48,22 @@ test("health thresholds: amber past 1 MB an hour or when a quiet poll that found
   assert.equal(healthSummary(h, now + 2 * HOUR).state, "green", "an hour later the writes have aged out of the window");
   h = freshHealth(); notePoll(h, { at: now, ms: 40, reqs: 3, bytes: 900000, heavy: true, changed: false }); assert.equal(healthSummary(h, now).state, "amber"); assert.match(healthSummary(h, now).sentence, /nothing had changed/);
 });
+
+test("0.8.1 fix: an engine built without a fetch function (as the background builds it) uses the browser's own fetch", async () => {
+  const { Engine, MemoryStorage } = await import("../extension/src/engine.js"); const w = await world(); const real = globalThis.fetch; let called = 0;
+  globalThis.fetch = (...a) => { called++; return w.fetchImpl(...a); };
+  try {
+    const storage = new MemoryStorage(); await storage.set({ settings: { device: "bg", miniflux: { url: "https://mf.test", token: "good-key" }, webdav: { url: "https://dav.test", user: "u", pass: "p", root: "pravaha" }, raindrop: { token: "rd-token" } } });
+    const e = new Engine({ storage }); await e.load(); await e.syncNow(); quiet(e);
+    assert.ok(called > 0); assert.equal(e.status().lights.find(l => l.id === "miniflux").state, "green"); assert.equal(e.status().lights.find(l => l.id === "webdav").state, "green");
+  } finally { globalThis.fetch = real; }
+});
+
+test("0.8.1 fix: reading ten articles in a row writes the article copy once, not ten times", async () => {
+  const { Engine, MemoryStorage } = await import("../extension/src/engine.js"); const w = await world(); let heavy = 0;
+  class S extends MemoryStorage { async set(o) { if ("cache" in o) heavy++; return super.set(o); } }
+  const storage = new S(); await storage.set({ settings: { device: "a", miniflux: { url: "https://mf.test", token: "good-key" } } });
+  const e = new Engine({ storage, fetchImpl: w.fetchImpl }); await e.load(); await e.syncNow(); quiet(e); heavy = 0;
+  for (const id of [1, 2, 3, 4]) { await e.openCard(id); await e.markUnread([id]); await e.openCard(id); } quiet(e);
+  assert.equal(heavy, 0, "nothing heavy during the burst"); await e.flushPersist(); assert.equal(heavy, 1, "one write when the delay ends, the poll comes or the page unloads");
+});
