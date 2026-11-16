@@ -561,6 +561,7 @@ export class Engine {
     const merged = [...want, ...top.map(x => x.id).filter(x => !want.includes(x))];
     if (JSON.stringify(merged) === JSON.stringify(top.map(x => x.id))) return false;
     const e = this.log.append("order", { payload: { scope: "root", ids: merged } }); this._derived = null;
+    await this.persist(["events"]); // the history copy of the order must be saved too, or it is lost when Firefox unloads the background page
     await this.saveSettings({ treeOrder: { ...(this.settings.treeOrder || {}), root: merged }, treeOrderAt: parseTs(e.ts).wall }); return true;
   }
   async moveNode(id, dir) {
@@ -571,8 +572,10 @@ export class Engine {
   unreadCount() { const d = this._derive(); return Object.values(this.cache.items).filter(i => i.status === "unread" && !d.dismissed.has(i.id)).length; }
   _rowOf(it, ctx, dead, pend) {
     const s = this.scoreOne(it, ctx);
-    return { id: it.id, feedId: it.feedId, feedTitle: it.feedTitle, title: it.title, summary: it.summary, url: it.url, publishedAt: it.publishedAt, read: it.status === "read", saved: it.starred,
-      score: s.score, why: whyRanked(s.breakdown), breakdown: roundBreakdown(s.breakdown), flag: s.flag, author: it.author, readingTime: it.readingTime, dead: dead.has(it.feedId), domain: it.domain, tags: it.tags || [], words: it.words || 0, thumb: it.thumb || null, media: it.media || null, comments: it.comments || null, newish: it.publishedAt > this.now() - 3 * 3600000, pending: !!(pend && pend.has(it.id)), rating: (ctx.story[String(it.id)] || {}).value || 0 };
+    // A publish date later than when Miniflux first stored the article is not trusted for display or order either.
+    const at = it.seenAt && it.publishedAt > it.seenAt + 7200000 ? it.seenAt : it.publishedAt;
+    return { id: it.id, feedId: it.feedId, feedTitle: it.feedTitle, title: it.title, summary: it.summary, url: it.url, publishedAt: at, read: it.status === "read", saved: it.starred,
+      score: s.score, why: whyRanked(s.breakdown), breakdown: roundBreakdown(s.breakdown), flag: s.flag, author: it.author, readingTime: it.readingTime, dead: dead.has(it.feedId), domain: it.domain, tags: it.tags || [], words: it.words || 0, thumb: it.thumb || null, media: it.media || null, comments: it.comments || null, newish: at > this.now() - 3 * 3600000, pending: !!(pend && pend.has(it.id)), rating: (ctx.story[String(it.id)] || {}).value || 0 };
   }
   getView({ scope = "all", mode = "unread", ranked = false, q = "", keep = [] } = {}, tree = null) {
     const d = this._derive(); const ctx = this._scoreCtx(); const keepSet = new Set(keep); const meta = this._feedMeta();

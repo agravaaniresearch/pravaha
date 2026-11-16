@@ -540,3 +540,4 @@ html { scroll-padding-bottom: 90px; }
 }
 @keyframes pv-pane-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
 .chip.hot { color: var(--on-accent); background: color-mix(in srgb, var(--accent) 85%, transparent); border-color: transparent; font-weight: 600; }
+:root[data-theme="khadi"] .chip.hot, :root[data-theme="light"] .chip.hot { background: var(--accent-ink); }

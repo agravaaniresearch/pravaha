@@ -6,7 +6,7 @@ import { FeedDetect } from "./src/feeddetect.js";
 
 const storage = { get: (k) => browser.storage.local.get(k), set: (o) => browser.storage.local.set(o) };
 const dwell = new DwellTracker();
-let syncing = 0; // the time the running sync started, or 0
+let syncing = 0; let rerun = false; // the time the running sync started, or 0
 // With no reader tab open nobody is looking, so a poll runs at most every ten minutes; the toolbar mark still updates.
 const IDLE_POLL_MS = 10 * 60000;
 async function readerOpen() {
@@ -61,15 +61,20 @@ const ready = (async () => {
   await schedule();
 })();
 
+// The alarm survives the background page being unloaded, so a wake leaves it alone; only a changed interval (or no alarm) re-arms it.
+// (Re-arming on every wake used to add an extra poll twelve seconds after each wake.)
 async function schedule() {
+  const period = Math.max(1, engine.settings.pollMinutes || 2); const cur = await browser.alarms.get("poll").catch(() => null);
+  if (cur && cur.periodInMinutes === period) return;
   await browser.alarms.clear("poll");
-  browser.alarms.create("poll", { delayInMinutes: 0.2, periodInMinutes: Math.max(1, engine.settings.pollMinutes || 2) });
+  browser.alarms.create("poll", { delayInMinutes: 0.2, periodInMinutes: period });
 }
 async function saveDwell() { try { await browser.storage.session.set({ dwell: dwell.snapshot() }); } catch { /* ignore */ } }
 async function runSync(opts) {
   // Every request has a deadline, so a sync cannot hang; the five-minute guard is a second line of defence.
-  if (syncing && Date.now() - syncing < 5 * 60000) return; syncing = Date.now();
-  try { await engine.syncNow(opts); } finally { syncing = 0; }
+  if (syncing && Date.now() - syncing < 5 * 60000) { if (!(opts && opts.quiet)) rerun = true; return; } // a sync you asked for during a running one runs right after it
+  syncing = Date.now();
+  try { await engine.syncNow(opts); } finally { syncing = 0; if (rerun) { rerun = false; runSync(); } }
 }
 
 // Firefox may not wake this page when Sync delivers data, so every poll also looks at Firefox Sync's storage (a local read, no network).

@@ -404,7 +404,7 @@ function fillCard(r) {
   const need = c.html != null && !c.full && r.words && r.words < 150;
   const rule = (type, key) => (S.rules.find(x => x.type === type && x.key === String(key).toLowerCase()) || {}).value || 0;
   const tr = (name, type, key) => h("span", { class: "trainrow" }, h("span", {}, name), ...[["More", 1], ["Less", -1]].map(([l, v]) => h("button", { class: "kw", "data-v": String(Math.sign(rule(type, key)) === v ? v : 0), onclick: () => train(type, key, rule(type, key) === v ? 0 : v) }, l)));
-  const bars = [["Tag match", bk.tagOverlap], ["Sites you read", bk.bookmarkEcho], ["Feed standing", bk.feedAuthority], ["Freshness", bk.freshness]].map(([n, v]) => h("div", { style: { "--grade": gradeOf(v).bg } }, h("span", {}, `${n}: ${pct(v)}`), h("div", { class: "gbar" }, h("i", { style: { width: pct(v) + "%" } }))));
+  const bars = [["Tag match", bk.tagOverlap], ["Sites you read", bk.bookmarkEcho], ["Feed standing", bk.feedAuthority], ["Freshness", bk.freshness], ["Covered by several feeds", bk.hot || 0]].map(([n, v]) => h("div", { style: { "--grade": gradeOf(v).bg } }, h("span", {}, `${n}: ${pct(v)}`), h("div", { class: "gbar" }, h("i", { style: { width: pct(v) + "%" } }))));
   const btn = (act, ic, label, key, fn, on) => h("button", { class: "btn small" + (on ? " on" : ""), "data-act": act, onclick: fn }, icon(ic, 15, act === "cardsave" && r.saved), h("span", {}, label), key ? h("kbd", {}, key) : null);
   host.replaceChildren(h("div", { class: "card" },
     h("h2", { class: "ctitle" }, r.title),
@@ -1320,6 +1320,16 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "B") { toggleBionic(); e.preventDefault(); return; }
   if (e.key === "a" && S.settings && S.settings.miniflux.token) { openAddFeed(); e.preventDefault(); return; }
   if (!isFeedTab() || !S.data) return;
+  // Wide screens: with the article in the side pane, the reading keys scroll the article, not the list behind it.
+  if (S.openCard && ["PageDown", "PageUp", " ", "ArrowDown", "ArrowUp", "Home", "End"].includes(e.key) && window.matchMedia("(min-width: 1800px)").matches) {
+    const pane = document.querySelector('.row[data-card="true"] .cardwrap');
+    if (pane && getComputedStyle(pane).position === "fixed") {
+      const page = pane.clientHeight * 0.85, line = 60; const dir = e.key === "PageUp" || e.key === "ArrowUp" || (e.key === " " && e.shiftKey) ? -1 : 1;
+      if (e.key === "Home") pane.scrollTo({ top: 0 }); else if (e.key === "End") pane.scrollTo({ top: pane.scrollHeight });
+      else pane.scrollBy({ top: dir * (e.key.startsWith("Arrow") ? line : page) });
+      e.preventDefault(); return;
+    }
+  }
   if (e.key === "/") { $app.querySelector(".search input")?.focus(); e.preventDefault(); return; }
   const r = S.rows.get(S.selId); const cardOpen = !!S.openCard;
   const handled = (() => {
