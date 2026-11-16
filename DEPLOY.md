@@ -104,6 +104,20 @@ No change to the storage and no new event type. Install the new file on each mac
 
 `shots070.py` drives the thumbs, the strip and the Raindrop line in real Firefox against a fake Raindrop (`serve.mjs` serves it under `/rd`; `ff.py` points the copy under test there, never at the real Raindrop). `WITH_APPLE=1` includes the Apple fonts in that copy. `node tools/failure-rates.mjs 150 --write` regenerates `docs/FAILURE_RATES.md`, which now includes the training trials.
 
+## 6e. Updating to 0.8.0
+
+No event type was added and no stored key was renamed. Install the new file on each machine; Firefox asks for no new permission.
+
+1. **New signing keys.** 0.8.0 was signed with a new pair of AMO keys. For the GitHub workflow to sign the next builds, replace both repository secrets (Settings, Secrets and variables, Actions): `AMO_JWT_ISSUER` (the `user:...` value) and `AMO_JWT_SECRET`. The workflow cannot read them from anywhere else, and this cannot be done from outside the repository settings.
+2. **The first sync after the update** records how many articles each feed published on each of the last three days. Feed standing uses these counts, so it settles over the first few days; until then it is worked out from the articles you touched. Scores are higher overall than in 0.7.0, so the colours look warmer. Nothing needs resetting.
+3. **The Ranking tab** has a fifth slider, "Covered by several feeds". Saved weights from 0.7.0 keep their values and the new one starts at 10 percent.
+4. **Themes:** the theme button now cycles through seven. Khadi, Jamun and Lacquer also switch the relevance colours to their own palette; change it back under Look and reading if you prefer.
+5. **Wide screens:** at 1800 pixels or wider the open article reads in a pane on the right. Narrow the window, or close the sidebar, if you prefer the card inside the list.
+6. **Quieter when closed:** with no Pravaha tab open, polls run at most every 10 minutes. Opening the reader fetches at once if the last fetch is older than your poll interval.
+7. Building the signed file yourself: run `python3 tools/apple-fonts.py` first (it needs `pip install fonttools brotli` and clones a large font collection), then `npx web-ext sign --source-dir extension --channel unlisted --api-key "$AMO_JWT_ISSUER" --api-secret "$AMO_JWT_SECRET"`. The version in `extension/manifest.json` must be new to AMO.
+
+`node tools/bench-lightness.mjs` prints what an idle poll and a card open cost on a synthetic library.
+
 ## 7. Testing in real Firefox
 
 `tools/firefox-e2e/` drives two or three real Firefox profiles with Selenium against a fake Miniflux and WebDAV. Needs Firefox (160 tested; Zen is built on it) and geckodriver under `/home/claude/ffx` (or set `FFX`), `pip install selenium`, and `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` (set by the script) so Marionette may open extension pages. Run `node tools/firefox-e2e/serve.mjs 8799 &` then `python3 tools/firefox-e2e/e2e.py`. `tools/firefox-e2e/probe_flash.py` runs two active machines for a few minutes and counts toasts and redraws while idle. Firefox Sync's cloud is not reachable there, so delivery is simulated by copying the `storage.sync` items between profiles.

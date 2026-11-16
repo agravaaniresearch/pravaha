@@ -7,7 +7,9 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 ## What it does
 
 - **Reads from Miniflux.** Folders are Miniflux categories. A slash makes a nested folder, so `Defence/Shipbuilding` appears as Shipbuilding inside Defence.
-- **Ranks with four signals.** The score is 0.40 tag match, 0.30 sites you read, 0.20 feed standing and 0.10 freshness. Training rules add or subtract up to 0.2. Feeds you have not opened this session get a small novelty boost. All weights are editable in Settings.
+- **Ranks with five signals (0.8.0).** 0.40 tag match (your best-matching Raindrop tag), 0.20 sites you read, 0.20 feed standing (the share of a feed's articles you engage with, not the count), 0.10 freshness and 0.10 for a story covered by several of your feeds. Training rules add or subtract up to 0.2. Feeds you have not opened this session get a small novelty boost. All weights are editable in Settings.
+- **Runs light (0.8.0).** An idle poll writes about 1 KB to Firefox's storage instead of several megabytes, makes 3 to 5 requests, and runs at most every 10 minutes while no Pravaha tab is open. Every request gives up after a deadline, so a hung server cannot freeze syncing.
+- **Reads in a pane on wide screens (0.8.0).** At 1800 pixels and wider the open article sits beside the list instead of inside it.
 - **Reads in place.** Opening an article shows it as a card inside the list, in Newsreader or Literata. Press `w` (the coffee cup) to ask Miniflux for the complete article. Press `b` to open it in a background tab. Both are logged, and a background open counts more than a card read.
 - **Stays organised.** Feeds are collapsible sections with their Miniflux icon and an unread count. Marking a section read folds it away. Articles can be marked read as they scroll past the top. The tabs are Newsfeed, Saved, Stats, Sync and Settings.
 - **Uses what Miniflux offers.** Thumbnails, reading time, word count, comment links, tags, audio and video enclosures and the full-article flag show as small chips.
@@ -22,7 +24,7 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Manages feeds without leaving the reader (0.6.0).** Settings, Feeds lists every feed with its health, a filter and "only feeds with trouble". Rename, move to a folder (or a new one), disable or enable, refresh now and delete are there, and also in the right-click menu on a feed. Folders can be renamed and refreshed from their menu, and "Refresh every feed" is on the All articles menu. Every change is made in Miniflux first, then shown here. Delete needs the exact name typed and offers Disable instead.
 - **Watches the Miniflux server for silent changes (0.6.0).** The Sync page has a Miniflux server tile with the version, a light, and a read-only "Check server" button. Every refresh checks that Miniflux's answers have the fields Pravaha relies on and leaves out anything that does not, so a server update cannot quietly write wrong data. A changed version turns the light amber until you press "Got it", and the toolbar button wears a small "!" in amber or red.
 - **Refreshes lightly (0.6.0).** The two-minute poll asks Miniflux which articles are unread (numbers only) and downloads just the ones it lacks, instead of every unread article. If the server cannot do that, Pravaha falls back to the full download by itself and says so on the Sync page.
-- **Has an OLED black theme** besides light and dark, two typefaces (Apple's New York for reading and SF Pro for the interface, which you add to your own build, see below) with the system serif and sans as fallbacks, chosen from labelled cards with a live sample, and reading controls for size, line gap and width.
+- **Has seven themes (0.8.0):** Light, Khadi (cotton, kohl and sindoor), Dark, Jamun (plum with kesar saffron and rani pink), Lacquer (oxblood with jade), OLED black, and Follow the system. Each new theme brings matching relevance colours. There are two typefaces (Apple's New York for reading and SF Pro for the interface, which you add to your own build, see below) with the system serif and sans as fallbacks, chosen from labelled cards with a live sample, and reading controls for size, line gap and width.
 - **Shows relevance as colour.** There are no Good, Great or Best tiers. Each row has a bar and a chip that darken as the score rises. Three palettes are included: ember, saffron and moss.
 - **Learns from what you do.** Opening in a tab, reading a card, reading for more than 15 seconds, saving and dismissing all move a feed's standing. They fade with a 14 day half life. Opens and saves also pull your interest profile toward the article.
 - **Trains like NewsBlur.** Open an article's details and choose More or Less for the feed, the author or a keyword.
@@ -71,10 +73,10 @@ Everything below is invented. The feeds, articles and bookmarks do not exist. Th
 
 ```
 Ranked on the laptop:
-   33  Shipyard signs frigate contract  [Ranked for you]  fresh, a feed you have not opened this session
-   28  New trial of hypofractionated radiotherapy  [Ranked for you]  fresh, a feed you have not opened this session
-   17  Twelve weeknight pasta ideas  [Ranked for you]  fresh, a feed you have not opened this session
-   15  Port dredging tender opens  [Ranked for you]  a feed you have not opened this session
+   56  New trial of hypofractionated radiotherapy  [Ranked for you]  fresh, a feed you have not opened this session
+   51  Shipyard signs frigate contract  [Ranked for you]  fresh, a feed you have not opened this session
+   26  Twelve weeknight pasta ideas  [Ranked for you]  fresh, a feed you have not opened this session
+   24  Port dredging tender opens  [Ranked for you]  a feed you have not opened this session
 
 Folder tree:
   Defence (2)
@@ -88,16 +90,64 @@ Folder tree:
 
 After the laptop opens the oncology trial, dismisses the pasta story and trains Harbour Weekly up:
 Ranked on the desktop (a second machine that never saw those clicks directly):
-   42  Shipyard signs frigate contract  [Ranked for you]  fresh, boosted by your training, a feed you have not opened this session
-   23  Port dredging tender opens  [Ranked for you]  boosted by your training, a feed you have not opened this session
+   60  Shipyard signs frigate contract  [Ranked for you]  fresh, boosted by your training, a feed you have not opened this session
+   32  Port dredging tender opens  [Ranked for you]  boosted by your training, a feed you have not opened this session
 
 Status lights on the desktop:
   green  Miniflux: Connected. Last fetch just now.
+  green  Miniflux server: Miniflux 2.3.5. The answers look as expected.
   green  WebDAV storage: Reachable. Last sync just now.
   green  Raindrop: Tags read just now.
   green  Reading history: Every change on this machine is on the storage.
-  green  Other machines: laptop is up to date (last connected just now).
+  amber  Other machines: laptop has not yet received your latest changes. It last connected just now, and will catch up when it next opens.
   red    Feeds: 1 feed is failing in Miniflux and excluded from ranking.
+
+Second refresh on the laptop (nothing new):
+  light refresh, 3 requests, 638 bytes
+After one new article: light refresh, 4 requests, 963 bytes
+
+Feed management:
+  Renamed to “Table Talk Weekly”.
+  Moved “Table Talk Weekly” to Food/Baking.
+  Disabled “Table Talk Weekly”. Miniflux will stop fetching it until you enable it again.
+  Renamed “Defence” to “Maritime”.
+  The name typed did not match the feed, so nothing was deleted.
+
+Check server (read-only):
+  green  Version: Miniflux 2.3.5.
+  green  Entry numbers: working (4 unread). Refreshes download only what is new.
+  green  New articles: working.
+  green  Feeds: 4 read.
+  off    Refreshing one folder is not tried here, because it would make Miniflux fetch feeds. It is checked the first time you use it.
+
+Folder tree now:
+  Maritime (2)
+    Shipbuilding (2)
+      Harbour Weekly (2)
+  Food (2)
+    Baking (1)
+      Table Talk Weekly (1)
+    Old Blog (1)
+  Medicine
+    Clinic Notes
+
+--- 0.7.0: training in plain sight ---
+The card for “Shipyard signs frigate contract”:
+  tags:  defence (your Raindrop tag), to-read (your Raindrop tag), shipbuilding
+  words: shipyard, signs, frigate, contract
+  Raindrop: you saved this page (#defence #to-read) with the note “Compare with last year's tender”
+  Close to something you saved: nothing close enough (a save is offered only above a similarity of 0.22)
+
+Thumbs up: score 63 -> 76; trained #defence, #to-read, #shipbuilding, shipyard, signs, frigate
+Click the “to-read” tag so it is “less”: score 76 -> 68
+Take the thumb back: score 55; the hand-set “to-read: less” rule is kept: feed:1:1, tag:to-read:-1
+The desktop, which never saw the clicks, holds the same rules: feed:1:1, keyword:hypofractionat:-0.3, keyword:radiotherapy:-0.3, keyword:trial:-0.3, tag:oncology:-0.3, tag:to-read:-1
+
+The digest now carries:
+  - 55 · [Shipyard signs frigate contract](https://site1.example/1) · Harbour Weekly · saved in Raindrop
+  ## What you trained
+  - More of: Harbour Weekly
+  - Less of: #to-read, #oncology, trial, hypofractionat, radiotherapy
 ```
 
 Reading it: the shipbuilding and radiotherapy stories lead because the invented Raindrop library is full of both. After the laptop trains Harbour Weekly up, the desktop ranks its stories higher without ever having seen the click directly. The pasta story is gone from the desktop because the laptop dismissed it. The desktop never cached the radiotherapy story because the laptop had already opened it before the desktop's first fetch. The Feeds light is red because the invented Old Blog feed is failing, and it is excluded from ranking.
@@ -226,17 +276,23 @@ Right-click a page or link and choose "Subscribe with Pravaha". Optionally, turn
 
 ## How ranking works
 
-Each unread article gets a score from 0 to 1: 0.40 tag match against your own Raindrop tag vocabulary, 0.30 echo (sites you read, from local history and bookmarks), 0.20 feed standing (learned from your actions) and 0.10 freshness. Training rules (thumbs, tag and word buttons, and More and Less on a feed or author) add or subtract up to 0.2 in total, tags match your own Raindrop tags of the exact page as well as suggested ones, words match stems, and feeds you have not opened this session get a small novelty boost. The score is stretched for display and shown as colour and a number, never as tiers.
+Each unread article gets a score from 0 to 1 from five signals (0.8.0; weights editable in Settings, Ranking):
 
-| Action | Effect on the feed's standing | Pull on your interest profile |
+| Signal | Weight | What it measures |
 |---|---|---|
-| Open in a background tab (`b`) | +0.15 | 0.05 |
-| Read as a card | +0.05 | 0.02 |
-| Reading for more than 15 seconds | +0.10 | none |
-| Save | positive | yes |
-| Dismiss | negative | none |
+| Tag match | 0.40 | How close the article is to your best-matching Raindrop tag, or to your whole interest profile if that is closer. The reason line names the tag. |
+| Sites you read | 0.20 | Similarity to your browsing history and bookmarks, plus a small smooth bonus for domains you visit. Pages opened from Pravaha are left out, so one open is not counted twice. |
+| Feed standing | 0.20 | The share of a feed's articles you engage with, not how many. An average feed is 0.5. A feed that publishes a hundred a day cannot rank on volume. |
+| Freshness | 0.10 | 0.5 at one day, about 0.1 at a week. A publish date later than when Miniflux first saw the article is not trusted. |
+| Covered by several feeds | 0.10 | The same story carried by other feeds you follow within 36 hours (Fever-style "hot"). Rows show "3 feeds". |
 
-Everything fades with a 14 day half life. The full schema, including the event log, is in [docs/SCHEMA.md](docs/SCHEMA.md).
+Training (thumbs, the tag and word buttons, More and Less on a feed or author) adds or subtracts up to 0.2 in total. Feeds you have not opened this session get a small novelty boost. A signal with nothing behind it yet hands its weight to the others. The score is shown as colour and a number, never as tiers.
+
+**Your interest profile** is your Raindrop saves, plus what you open, save and thumb up. Those actions can never take more than 30 percent of it and fade with a 60-day half life, so the profile follows your recent reading without forgetting what you saved over years.
+
+**Feed standing** counts each article once, from its final state: reading it as a card is 0.25, opening it in a tab 0.5, reading for more than 15 seconds 0.25 more, saving it 1 (capped at 1). Dismissing it, or marking it read without opening it, counts against. Everything fades with a 14-day half life, and an undo is exact. Once a day each machine records how many articles each feed published, which is what the engagement is divided by.
+
+The mathematics, the defects found in 0.7.0 and what was rejected are in [docs/RELEVANCE_REVIEW.md](docs/RELEVANCE_REVIEW.md). The schema is in [docs/SCHEMA.md](docs/SCHEMA.md).
 
 ## Architecture
 
@@ -285,10 +341,11 @@ No telemetry. Data goes only to servers you configure. Credentials are stored un
 
 ```
 npm install
-npm test            # 226 tests: engine, event log, sync, services, search, bulk marking, reader screen under jsdom
+npm test            # 255 tests: engine, scoring, event log, sync, services, search, bulk marking, reader screen under jsdom
 npm run lint        # Mozilla's web-ext lint
 node tools/failure-rates.mjs 150 --write
 node tools/example-run.mjs
+node tools/bench-lightness.mjs      # what an idle poll and a card open cost (synthetic library, headless)
 python3 tools/screenshots/shoot.py   # regenerates docs/screenshots (needs Chrome and playwright)
 node tools/firefox-e2e/serve.mjs 8799 & python3 tools/firefox-e2e/e2e.py   # real Firefox, two profiles (see DEPLOY.md, section 7)
 ```
@@ -301,7 +358,7 @@ See [DEPLOY.md](DEPLOY.md). The short version: download `pravaha.xpi` from the l
 
 ```
 npm install
-npm test                       # 226 tests
+npm test                       # 255 tests
 node tools/failure-rates.mjs   # random failure injection, see docs/FAILURE_RATES.md
 npm run lint                   # Mozilla's web-ext lint
 ```
@@ -309,6 +366,8 @@ npm run lint                   # Mozilla's web-ext lint
 The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. They cover scoring, the event log, two-machine convergence, offline queues, corrupted files and the engine end to end. The reader screen itself is driven under jsdom against the real engine: opening cards, the sanitiser, collapsing, read on scroll, settings tests, themes and shortcuts. The jsdom run found one real bug, now fixed: Undo dismissed did not make the article unread again. The failure harness found and fixed one real bug: two overlapping Miniflux updates could drop a read. It is covered by a regression test.
 
 ## What has not been verified
+
+- **Everything new in 0.8.0 is untested against a real Miniflux, Fastmail or Raindrop.** The new feed standing, the hot-story threshold (cosine 0.35 within 36 hours) and the display stretch were tuned on synthetic data and are judgment calls; check them on the Stats page after a week of real reading. The speed and storage figures come from a headless Node benchmark on a synthetic library, not from your machine. The reading pane relies on the CSS `:has()` selector, which Firefox has supported since version 121. Whether Firefox wakes the background page exactly on the alarm, and how long it keeps it, varies with the Firefox build; the 10-minute idle rule only ever makes polls rarer, never more frequent.
 
 - **Everything new in 0.7.0 is untested against a real Raindrop or Miniflux.** The Raindrop context (exact save and close saves) uses the copy already kept for ranking, and was driven in real Firefox 160 against a fake Raindrop only. The exact-page match depends on the address matching after tracking parameters are removed; a site that serves other articles from one address would match wrongly. The similarity threshold for "close to something you saved" (0.22) was set by eye on synthetic text, and the 0.3 weight of a thumb was tuned on synthetic data, so both may need adjusting on your library. The speed figures for tag suggestion (about 0.3 s at 3,000 articles, 2,000 saves) come from a headless Node run, not your machine. A copy of Pravaha older than 0.5.0 on another machine will not understand the new training entries.
 - **Everything new in 0.6.0 is untested against a real Miniflux.** The entry-number call (`GET /entries/ids`, Miniflux 2.3.2 or newer), the position marker (`after_entry_id`), feed and folder changes (`PUT /feeds/{id}`, `PUT /categories/{id}`, `DELETE /feeds/{id}`) and the refresh calls follow the documentation and are tested against fakes and in real Firefox against a fake server. The Check server button on the Sync page is how you find out on your own server; if a call is missing there, Pravaha uses the older path by itself. Folder and all-feed refresh only show their effect the first time you use them. A folder rename that fails part-way leaves some folders renamed; the message says which, and the page then follows Miniflux.
@@ -335,7 +394,8 @@ The tests run in Node against in-memory fakes of Miniflux, WebDAV and Raindrop. 
 extension/          the add-on (manifest, background page, reader screen, modules in src/)
 test/               node:test suites and the fake servers
 tools/              failure-rate harness and the synthetic example
-docs/               schema, policy review, failure rates
+docs/               schema, policy review, failure rates, relevance review
+ROADMAP.md          what comes next, and what was left out on purpose
 .github/workflows/  test, lint, sign and release
 ```
 

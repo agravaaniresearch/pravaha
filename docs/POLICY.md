@@ -42,7 +42,7 @@ This is a design review of a personal tool, not legal advice.
 - **Filter bubble.** Ranking by similarity to what you already read narrows what you see. The novelty boost, the serendipity flag from outside scoring and the Unread view in feed order are the counterweights. The Ranked toggle is optional, and the default view is grouped by feed.
 - **Not a quality signal.** A high score means similar to your habits. It does not mean accurate, current or well sourced. For clinical or policy reading the user remains responsible for appraising the source.
 - **Dismiss cost.** Dismissing lowers a feed's standing, which can hide a good feed after a few impatient clicks. Dismissals are reversible with Undo dismissed, and standing fades with a 14 day half life.
-- **Explainability.** Every score has a plain sentence saying why, and the details row shows the four components. No hidden signals are used.
+- **Explainability.** Every score has a plain sentence saying why, and the details row shows the five components (four before 0.8.0). No hidden signals are used.
 
 ## Security review
 
@@ -65,6 +65,15 @@ This is a design review of a personal tool, not legal advice.
 - **Training can narrow what you see.** Rules persist until cleared and, unlike feed standing, do not fade. Stats lists every rule with a Remove button, and the digest prints what is currently set to more and less, so the narrowing is visible. A thumbs up also pulls the interest profile (rate 0.08); a thumbs down does not push it away, so the profile cannot be driven negative.
 - **Words and tags are personal.** Rules, thumbs and the digest section name your interests. They are stored in the local event log and shared through the WebDAV history log (and so end up in your Fastmail account) like every other event; they are not sent anywhere else. The Raindrop context shown on a card comes from the copy already kept for ranking and is never sent on.
 - **A wrong "you saved this".** The exact-match claim rests on the page address after tracking parameters are removed. A site that serves different articles from one address with a changing query is treated as one page only if the parameters are tracking ones, so a false match is unlikely but not impossible. "Close to something you saved" is a text similarity, not a claim of sameness.
+
+## Behavioural and operational risks of 0.8.0
+
+- **Standing now rewards depth, not volume.** A feed you open often but skim a large share of will fall compared with 0.7.0, and a small feed you read in full will rise. This is the intended correction, but it changes what floats up in the Ranked view. Standing never hides an article; it only colours and orders it.
+- **"Hot" rewards what many outlets cover.** A story several of your feeds carry gets up to 0.1 more. That favours agenda-setting news over a single original report. The weight is editable and can be set to zero. The match is a text similarity within 36 hours, so two different stories with near-identical wording (wire copy) can be paired; the chip names the count, never a claim that the reports agree.
+- **The daily article counts are new shared data.** Each machine writes, once a day, how many articles each feed published, to the WebDAV history like every other event. It names feed numbers, not titles or articles, and goes nowhere else.
+- **Delayed writes.** The article copy, history and search index are written up to 1.2 seconds after a change, and all at once on suspend. Changes for Miniflux and this machine's newest history lines are written at once, so a crash in that window can lose only what Miniflux and the next refresh restore. The failure trials were re-run and are unchanged.
+- **Deadlines.** A request that takes longer than its deadline is abandoned and retried on the next poll. On a very slow connection a large first download could time out repeatedly; the Sync page then says so in a sentence. The deadlines are 30 seconds for Miniflux and Raindrop, 60 for WebDAV and 90 for a full-article fetch.
+- **Fewer polls when closed.** With no reader tab open, the toolbar mark can be up to 10 minutes late.
 
 ## Residual risks to accept knowingly
 

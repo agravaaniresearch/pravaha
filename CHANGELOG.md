@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.8.0
+
+A senior review of the whole code base, a mathematical review of the relevance engine, and a pass for lightness and design. No event type was added and no stored key was renamed, so 0.7.0 and 0.8.0 machines read each other's history; update both machines anyway, because only 0.8.0 understands the daily article counts that the new feed standing uses.
+
+### Lighter
+
+Measured with `node tools/bench-lightness.mjs` on a synthetic library (200 feeds, 3,000 unread articles, 4,400 Raindrop saves, 2,000 history events) in headless Node against the fakes. The numbers show the size of the change, not the speed of your machine.
+
+| What | 0.7.0 | 0.8.0 |
+|---|---|---|
+| Written to Firefox's storage on an idle poll | 6.6 MB | about 1 KB |
+| Written at once when you open a card | 3.3 MB | about 1 KB (the article copy follows once, 1.2 s after a burst of actions) |
+| Requests on an idle poll after Firefox wakes the extension | 19 | 5 |
+| Requests on an idle poll while awake | 10 | 3 |
+| Time for an idle poll after a wake | 661 ms | 82 ms |
+| Opening a card and redrawing the list | 336 ms | 77 ms |
+| Polls while no Pravaha tab is open | every 2 minutes | at most every 10 minutes |
+
+Causes removed:
+
+- Every poll and every action rewrote the whole article copy, history log and search index. Now the small keys are written at once, the heavy ones a moment later and only when their content changed, and this machine's newest history lines go out at once as a short tail so nothing is lost if Firefox closes in between.
+- Every open, card, save or dismiss rebuilt the vocabulary and all 4,400 bookmark vectors. They are now built once per Raindrop copy; only the interest profile is recomputed.
+- Every poll re-read the whole feed list, downloaded the full text of every article whose state changed, made the WebDAV folders again after each wake, rewrote this machine's state file, downloaded the other machine's newest history file and uploaded the outside-scoring file. Now: the feed list every fifteen minutes (or at once when an unknown feed appears), no bodies on a light refresh, folders once, the state file when it changed or every fifteen minutes, the other machine's history only when its state file says there is something new, and the outside-scoring files at most hourly.
+- A feed icon Miniflux refused was asked for again on every poll.
+- Article vectors were thrown away on every refresh and rebuilt.
+
+### Fixed
+
+- **A server that never answered froze syncing until Firefox restarted.** No request had a deadline, and the sync lock stayed taken. Every request to Miniflux, WebDAV and Raindrop now gives up after 30 seconds (60 for WebDAV, 90 for the full-article fetch) with a plain sentence, and the lock has a second guard.
+- **CI could not build 0.7.0.** A test read the git-ignored fonts folder, which does not exist in a clean checkout, so no signed release was made. The test now accepts a build without the fonts.
+- A clock far ahead on another machine was adopted and froze decay for everyone. More than a day ahead is now ignored.
+- A damaged training value could zero every matching article. It is now skipped, and values are kept within -3 to 3.
+- A theme or folder-order change rebuilt the Miniflux, WebDAV and Raindrop clients and threw away the model. Only a change of connection or machine name does now.
+- Raindrop's rate limit (429) is explained in plain words.
+
+### Ranking (see docs/RELEVANCE_REVIEW.md)
+
+An independent mathematical review found four structural problems. Each is fixed:
+
+- **Feed standing is now the share of a feed's articles you engage with, not how many.** In 0.7.0 a feed with 100 articles a day and 2 opened scored the same as a feed you read in full (both 1.0), and a busy month kept a feed at the top for about two months. Standing is now an engagement rate with a prior, shown so that an average feed sits at 0.5. Once a day each machine logs how many articles each feed published (a `calibration` event; earlier versions already accept and ignore it).
+- **Tag match now uses your best-matching Raindrop tag**, not one average of every bookmark, which sat between your interests and barely separated a minority interest from off-topic articles. The reason line names the tag.
+- **The interest profile no longer forgets your bookmarks.** Opens, saves and thumbs can now take at most 30 percent of it and fade over 60 days; in 0.7.0 a hundred opens left the bookmarks 0.6 percent of the profile.
+- **One open is counted once.** Pages opened from Pravaha are left out of the browsing-history signal.
+- **Hot stories (Fever-style).** The same story carried by several of your feeds within 36 hours gets a "3 feeds" chip and a small boost (new weight "Covered by several feeds", 10 percent by default).
+- Undo of a save or a dismiss is exact. A signal with nothing behind it hands its weight to the others instead of capping every score. "F-35", "S-400" and "MQ-9B" survive as words, HTML entities no longer become words, and "U.S." is kept.
+- The colour stretch no longer clips, so the top of the list stays distinguishable. Scores are higher on the whole than in 0.7.0, so colours look warmer.
+
+On the synthetic library the share of on-topic articles in the top 100 went from 87 to 100. That library has cleanly separated interests, so expect a smaller gain on yours; the Stats page shows it.
+
+### Design
+
+- **A reading pane on wide screens.** At 1800 pixels and wider, the open article reads in its own pane on the right while the list stays on the left; with nothing open the pane says how to open one. Below that width nothing changes.
+- **Three new themes, each with its own relevance colours:** Khadi (unbleached cotton, kohl text, sindoor accent), Jamun (plum dark with kesar saffron running into rani pink), Lacquer (oxblood dark with jade). Choosing one also picks its colours; the palette can still be changed.
+- The open row no longer repeats the title and summary above the card. Scores sit at the right edge in tabular figures, and the relevance strip glows faintly in its own colour so the day's heat reads down the left edge.
+
+### Checked
+
+- 255 tests pass (29 new in `test/scoring.test.mjs` and `test/v080.test.mjs`), web-ext lint is clean, and the failure trials in `docs/FAILURE_RATES.md` are unchanged at 0, 5, 20 and 50 percent of requests failing. Real Firefox 160 runs are in the QA section of the README.
+- Not verified against a real Miniflux, Fastmail or Raindrop. The new feed standing and the hot threshold are tuned on synthetic data.
+
 ## 0.7.0
 
 Training the ranking is now visible. Nothing in the storage or the event types changed.

@@ -194,3 +194,49 @@ A thumb on an article (`rateStory`) sets a rule of +/-0.3 on its top three tags 
 ## Digest additions (0.7.0)
 
 Each of the top articles carries `saved in Raindrop` (exact match) or `close to your Raindrop save "title"` (closest related). A new section **What you trained** lists the tags, words, feeds and authors currently set to more and to less (twelve of each at most). The digest is still written weekly (`digests/<ISO week>.md`).
+
+## 0.8.0: lighter storage, engagement-rate standing, hot stories
+
+No event type was added and no key was renamed. Older copies read everything a 0.8.0 machine writes.
+
+### Event `calibration` with `payload.kind: "exposure"`
+
+`{ kind: "exposure", day: "YYYY-MM-DD", feeds: { "<feedId>": <articles published that UTC day> } }`. Each machine logs one per whole day it has not logged yet (the last three days at most), counted from its own article copy. Standing takes, per feed and day, the largest count any machine reported, so the result does not depend on which machine logged it or in what order the logs arrive. `calibration` has been a valid type since 0.1, and `derive` before 0.8.0 ignores it.
+
+### Score (replaces the formula above)
+
+```
+final     = clamp( (wt*tag + we*echo + ws*standing + wf*freshness + wh*hot + training) * novelty )
+weights   = tag 0.40, echo 0.20, standing 0.20, freshness 0.10, hot 0.10; a signal with no source (no echo data, no hot map) gets weight 0 and the rest are rescaled
+tag       = 1 - exp(-3 * max(cosine with interest profile, best tag cosine))
+best tag  = max over Raindrop tags with 2+ saves of cosine(article, tag profile) * n/(n+1)
+echo      = 1 - exp(-3 * (cosine with echo vector + min(0.15, 0.05 * log2(1 + domain visits / 3))))
+standing  = rate / (rate + m),  rate = (10*m + engaged) / (10 + trials),  m = your mean rate over all feeds (prior 0.05 over 50 trials)
+            engaged per article = min(1, 0.25 card + 0.5 open + 0.25 dwell>15s + 1 saved), decayed from first touch (14-day half life)
+            trials per feed = max(decayed exposure counts, decayed articles touched) + 1 per dismiss + 0.5 per read-without-open
+hot       = ln(1 + k) / ln 6, k = other feeds whose article within 36 h shares 2+ of the top 8 terms and has cosine >= 0.35
+freshness = 1 / (1 + (hours/24)^1.129), hours from published_at, but not later than created_at + 2 h; missing date = 24 h
+training  = clamp(sum of rule values (each clamped to -3..3) * 0.08, -0.2, 0.2)
+display   = 1.25s / (1.25s + 1 - s)
+```
+
+Interest profile: `(1 - L) * bookmark mean + L * weighted mean of pulls`, pull weights save 1, thumbs up 0.67, open 0.42, card 0.17, each decayed with a 60-day half life, `L = 0.3 * W / (W + 5)` where `W` is the total pull weight; pruned to 500 terms. Pulls carry their event time (`at`) in derived state.
+
+### Local storage keys
+
+| Key | Written | Meaning |
+|---|---|---|
+| `cache`, `events`, `searchIndex` | 1.2 s after a change, and only if the content differs from the last write; at once at the end of a sync | The heavy keys. A hash of the last written article copy is kept in memory, so an unchanged copy is never rewritten. |
+| `eventsTail` | at once | This machine's events newer than the last full `events` write. Merged on load; emptied when `events` is written. |
+| `marks` | at once | `{ feedsAt, lastChangeTs, outboxAt, outboxSig, exposureDay }`: when the feed list was last read, the Miniflux change cursor (moved out of `cache` so the copy does not change on every poll), the outside-scoring throttle, the last day whose article counts were logged. |
+| `syncState` | at once | New fields: `dirsOk` (`root|device` whose WebDAV folders are known to exist), `stateSig` and `stateAt` (the state file is rewritten when its content changes or every 15 minutes), `listedAt` (the machine-folder listing is re-read every 30 minutes; between those, the state files name the machines). |
+| `cache.items[id].seenAt` | with the article | Miniflux `created_at`: when the server first stored the entry. Used to distrust future publish dates. |
+| `settings.weights.hot` | with settings | The fifth weight. A four-weight object from 0.7.0 gets the default. |
+
+### Polling
+
+- A quiet poll reads `/v1/feeds` at most every 15 minutes, or at once when an unread article names a feed not in the copy. A sync you start reads it every time.
+- A light refresh no longer asks `changed_after`; read and saved state are reconciled by entry number.
+- `enrich/results.json` is read and `enrich/outbox.json` written at most hourly, and the outbox only when its list of articles changed.
+- A machine whose `state/<device>.json` says its `pushedSeq` is at or below what this machine already holds, with every earlier segment read whole, is not listed or downloaded.
+- With no reader tab open, the background skips a poll if the last successful fetch is under 10 minutes old and nothing is waiting to be sent.
