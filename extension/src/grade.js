@@ -5,8 +5,15 @@ export const disp = (score) => Math.min(1, Math.max(0, num(score)) / DISPLAY_SCA
 const PALETTES = {
   ember: ["#ecdcb8", "#f2b84b", "#e08a00", "#a8480f"],
   saffron: ["#f0e8c8", "#f4d35e", "#f0a202", "#c75b00"],
-  moss: ["#e3e6cc", "#b9cc7a", "#7ea82a", "#3f5a0c"]
+  moss: ["#e3e6cc", "#b9cc7a", "#7ea82a", "#3f5a0c"],
+  // 0.8.0: kesar runs saffron into rani pink (made for Jamun), jade suits Lacquer, sindoor suits Khadi.
+  kesar: ["#f3dccb", "#ffb46b", "#ff7a3d", "#d6336c"],
+  jade: ["#d9efe4", "#8fd9b9", "#2fae84", "#0f6e55"],
+  sindoor: ["#f6e1d6", "#f3a37f", "#e2582f", "#9e1f12"]
 };
+export const PALETTE_NAMES = Object.keys(PALETTES);
+// The palette that suits each theme, offered when a theme is chosen.
+export const THEME_PALETTE = { light: "ember", dark: "ember", oled: "ember", khadi: "sindoor", jamun: "kesar", lacquer: "jade" };
 const hex = (h) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
 export function gradeColor(score, palette = "ember") {
   const stops = PALETTES[palette] || PALETTES.ember; const t = Math.min(1, Math.max(0, num(score))) * (stops.length - 1);

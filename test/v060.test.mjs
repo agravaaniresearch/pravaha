@@ -69,9 +69,9 @@ test("after the first download, a refresh asks for entry numbers and fetches onl
   const w = await shelf(); const { e } = await w.mk("laptop"); await e.refresh(); assert.equal(e.net.miniflux.mode, "full", "an empty cache downloads everything once");
   const have = Object.keys(e.cache.items).length; assert.ok(have >= 16);
   w.mf.st.calls.length = 0; await e.refresh();
-  assert.equal(e.net.miniflux.mode, "light"); assert.equal(calls(w, /GET \/entries\/ids/).length >= 1, true); assert.equal(calls(w, /GET \/entries$/).length, 1, "only the changed-since question is left");
+  assert.equal(e.net.miniflux.mode, "light"); assert.equal(calls(w, /GET \/entries\/ids/).length >= 1, true); assert.equal(calls(w, /GET \/entries$/).length, 0, "0.8.0: the light pull reconciles by number, so no article body is downloaded on an idle refresh");
   const nw = entry(900, 1, "A brand new story", "Fresh synthetic text.", 0); nw.feed = { id: 1, title: "Naval Wire", category: { title: "Defence/Shipbuilding" } }; w.mf.st.entries.push(nw);
-  w.mf.st.calls.length = 0; await e.refresh(); assert.equal(e.cache.items[900].status, "unread"); assert.equal(e.cache.items[900].title, "A brand new story"); assert.ok(calls(w, /GET \/entries$/).length >= 2, "one page of new articles, one changed-since"); assert.equal(Object.keys(e.cache.items).length, have + 1);
+  w.mf.st.calls.length = 0; await e.refresh(); assert.equal(e.cache.items[900].status, "unread"); assert.equal(e.cache.items[900].title, "A brand new story"); assert.equal(calls(w, /GET \/entries$/).length, 1, "one page of new articles and nothing else"); assert.equal(Object.keys(e.cache.items).length, have + 1);
   assert.ok(e.net.miniflux.calls < 14 && e.net.miniflux.bytes > 0, "the call and byte counts are kept for the Sync page");
 });
 test("a light refresh brings in an article another device marked read, deleted, or turned back to unread, and a star added or removed elsewhere", async () => {

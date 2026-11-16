@@ -37,7 +37,12 @@ export function partsFor(patch) {
 export function makeHandlers({ engine, fetchImpl, runSync, schedule, openTab, profile, detect, openSubscribe }) {
   const share = async (parts, opts) => { if (!profile) return null; try { return await profile.push(parts, opts); } catch { return null; } };
   return {
-  boot: async () => ({ settings: engine.settings, tree: engine.tree(), status: engine.status(), rules: engine.trainingRules(), icons: engine.icons }),
+  boot: async () => {
+    // Opening the reader after a quiet spell fetches at once instead of waiting for the next alarm.
+    const last = (engine.net && engine.net.miniflux && engine.net.miniflux.lastOkAt) || 0;
+    if (runSync && engine.mf && Date.now() - last > Math.max(1, engine.settings.pollMinutes || 2) * 60000) Promise.resolve().then(() => runSync({ quiet: true })).catch(() => {});
+    return { settings: engine.settings, tree: engine.tree(), status: engine.status(), rules: engine.trainingRules(), icons: engine.icons };
+  },
   icons: async () => engine.icons,
   tree: async () => ({ tree: engine.tree(), status: engine.status(), unreadTotal: engine.unreadCount() }),
   content: (m) => engine.getContent(m.id),

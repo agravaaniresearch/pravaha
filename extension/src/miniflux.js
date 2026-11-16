@@ -1,5 +1,5 @@
 // Miniflux REST client. Auth is the X-Auth-Token header (Settings > API Keys in Miniflux).
-import { PlainError } from "./webdav.js";
+import { PlainError, deadline, timedOut } from "./webdav.js";
 
 export const DEAD_FEED_ERRORS = 5;
 export function splitCategory(title) { return String(title || "Uncategorised").split("/").map(s => s.trim()).filter(Boolean); }
@@ -9,14 +9,15 @@ export class Miniflux {
     this.base = String(baseUrl || "").replace(/\/+$/, "");
     this.token = token; this.fetch = fetchImpl || ((...a) => fetch(...a)); this.stats = { calls: 0, bytes: 0 };
   }
-  async call(method, path, body) {
+  async call(method, path, body, ms) {
     let res; this.stats.calls++;
     try {
       res = await this.fetch(`${this.base}/v1${path}`, {
         method, headers: { "X-Auth-Token": this.token, "Content-Type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body)
+        body: body === undefined ? undefined : JSON.stringify(body), signal: deadline(ms)
       });
-    } catch {
+    } catch (e) {
+      if (timedOut(e)) throw new PlainError("Miniflux did not answer in time. The reader keeps the copy saved on this machine and tries again on the next refresh.", "timeout");
       throw new PlainError("Could not reach Miniflux. Check the connection or the server address; the reader will use the copy saved on this machine.", "unreachable");
     }
     const fail = (plain, code) => { const e = new PlainError(plain, code); e.status = res.status; return e; };
@@ -42,7 +43,7 @@ export class Miniflux {
     return this.call("GET", "/entries" + (q.toString() ? "?" + q : ""));
   }
   entry(id) { return this.call("GET", `/entries/${id}`); }
-  fetchContent(id) { return this.call("GET", `/entries/${id}/fetch-content`); }
+  fetchContent(id) { return this.call("GET", `/entries/${id}/fetch-content`, undefined, 90000); }
   setStatus(ids, status) { return this.call("PUT", "/entries", { entry_ids: ids, status }); }
   toggleBookmark(id) { return this.call("PUT", `/entries/${id}/bookmark`); }
   discover(url) { return this.call("POST", "/discover", { url }); }

@@ -3,6 +3,11 @@ export class PlainError extends Error {
   constructor(plain, code) { super(plain); this.plain = plain; this.code = code || "error"; }
 }
 
+// Every request has a deadline. A hung server would otherwise hold the sync lock forever and nothing would refresh until Firefox restarts.
+export const TIMEOUT_MS = 30000;
+export function deadline(ms = TIMEOUT_MS) { try { return typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined; } catch { return undefined; } }
+export const timedOut = (e) => !!e && (e.name === "TimeoutError" || e.name === "AbortError");
+
 export class WebDav {
   constructor({ baseUrl, user, pass, fetchImpl }) {
     this.base = String(baseUrl || "").replace(/\/+$/, "");
@@ -13,8 +18,9 @@ export class WebDav {
   async req(method, path, opts = {}) {
     let res;
     try {
-      res = await this.fetch(this.url(path), { method, headers: { Authorization: this.auth, ...(opts.headers || {}) }, body: opts.body });
-    } catch {
+      res = await this.fetch(this.url(path), { method, headers: { Authorization: this.auth, ...(opts.headers || {}) }, body: opts.body, signal: deadline(60000) });
+    } catch (e) {
+      if (timedOut(e)) throw new PlainError("The WebDAV storage did not answer within a minute. Changes stay saved on this machine and are sent on the next try.", "timeout");
       throw new PlainError("Could not reach the WebDAV storage. Check the connection; changes stay saved on this machine until it returns.", "unreachable");
     }
     if (res.status === 401 || res.status === 403) throw new PlainError("The WebDAV storage refused the username or app password. Create a new app password in Fastmail and enter it in Settings.", "auth");

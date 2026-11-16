@@ -96,11 +96,13 @@ test("j and k move the selection; s saves and stars in Miniflux; m toggles read"
   const id = Number(first.dataset.id); t.key("s"); await wait(150); assert.equal(t.w.mf.st.entries.find(e => e.id === id).starred, true); assert.equal(first.dataset.saved, "true");
   const was = first.dataset.read; t.key("m"); await wait(80); assert.notEqual(first.dataset.read, was); t.close();
 });
-test("theme cycle reaches OLED black and sticks; reading type changes apply instantly", async () => {
-  const t = await mount(); const btn = () => t.$("[aria-label='Change theme']"); const seen = [];
-  for (let i = 0; i < 4; i++) { btn().click(); seen.push(t.win.document.documentElement.dataset.theme); }
-  assert.deepEqual(seen, ["light", "dark", "oled", "light"].slice(0, 4).map((x, i) => ["dark", "oled", "light", "light"][i] === undefined ? x : x).length === 4 ? seen : seen);
-  assert.ok(seen.includes("oled")); assert.equal(JSON.parse(t.win.localStorage.getItem("pravaha.ui")).theme, "light");
+test("theme cycle reaches every theme, including the 0.8.0 Khadi, Jamun and Lacquer, and comes back round; a new theme brings its own relevance colours", async () => {
+  const t = await mount(); const btn = () => t.$("[aria-label='Change theme']"); const seen = []; const pals = {};
+  for (let i = 0; i < 8; i++) { btn().click(); const ui = JSON.parse(t.win.localStorage.getItem("pravaha.ui")); seen.push(ui.theme); pals[ui.theme] = ui.palette; }
+  for (const th of ["light", "khadi", "dark", "jamun", "lacquer", "oled"]) assert.ok(seen.includes(th), th + " is reached");
+  assert.equal(seen[7], seen[0], "seven presses come back round");
+  assert.equal(pals.jamun, "kesar"); assert.equal(pals.lacquer, "jade"); assert.equal(pals.khadi, "sindoor");
+  assert.ok(["jamun", "lacquer", "khadi", "oled", "dark", "light"].includes(t.win.document.documentElement.dataset.theme));
   t.$(".aa").click(); const size = t.$(".pop input[type=range]"); size.value = "22"; size.dispatchEvent(new t.win.Event("input", { bubbles: true }));
   assert.equal(t.win.document.documentElement.style.getPropertyValue("--read-size"), "22px"); t.close();
 });

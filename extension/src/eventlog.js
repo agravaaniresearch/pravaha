@@ -62,6 +62,7 @@ export class EventLog {
   head() { const l = this.list(); return l.length ? l[l.length - 1].ts : null; }
   headOf(device) { let h = null; for (const e of this.byId.values()) if (e.device === device && (!h || e.ts > h)) h = e.ts; return h; }
   count() { return this.byId.size; }
+  maxSeqOf(device) { let m = 0; for (const e of this.byId.values()) if (e.device === device) { const n = Number(e.eid.split(":")[1]) || 0; if (n > m) m = n; } return m; }
   countsByDevice() { const c = {}; for (const e of this.byId.values()) c[e.device] = (c[e.device] || 0) + 1; return c; }
 }
 

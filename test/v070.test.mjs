@@ -124,7 +124,7 @@ test("scoring with tag rules stays quick on a big shelf, and costs nothing witho
 });
 
 test("only the two Apple families are bundled: no other font file, face or licence ships in the extension", () => {
-  const dir = new URL("../extension/ui/fonts/", import.meta.url); const here = fs.readdirSync(dir).filter(f => f !== "apple");
+  const dir = new URL("../extension/ui/fonts/", import.meta.url); const here = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f !== "apple") : []; // a clean checkout (and CI) has no fonts folder at all
   assert.deepEqual(here, [], "no font file outside the git-ignored apple folder");
   const css = fs.readFileSync(new URL("../extension/ui/reader.css", import.meta.url), "utf8"); const fams = [...css.matchAll(/@font-face\s*\{\s*font-family:\s*"([^"]+)"/g)].map(m => m[1]);
   assert.deepEqual([...new Set(fams)].sort(), ["Pravaha New York", "Pravaha SF Pro"]); assert.ok(!/serif-newsreader|ui-plex|serif-literata|ui-ubuntu/.test(css), "no leftover variable names");

@@ -20,13 +20,31 @@
   --accent: #f7b538; --accent-ink: #f7b538; --bg: #17110b; --surface: #1e1610; --raised: #271c13; --line: #34261a; --text: #ecdfc9; --muted: #b5a48a; --hover: #2a1e12; --track: #2e2216; --shadow: 0 8px 28px rgba(0,0,0,.5);
   --ok: #c4e08a; --ok-bg: #2a3510; --warn: #f7c97a; --warn-bg: #3b2a10; --bad: #f5b3a6; --bad-bg: #42190f;
 }
+:root[data-theme="khadi"] {
+  /* Khadi: unbleached cotton, kohl ink and a sindoor accent. A light page that is warm without being yellow. */
+  --accent: #c8361b; --accent-ink: #9c2410; --on-accent: #fff8f2; --amber: #e0a33a;
+  --bg: #f1ece1; --surface: #f9f6ef; --raised: #ebe3d3; --line: #ddd2bf; --text: #1c1916; --muted: #675d52; --hover: #f3ebdc; --track: #e5dccb; --shadow: 0 6px 24px rgba(40,25,10,.12);
+  --ok: #2f5d33; --ok-bg: #dfeadb; --warn: #7a4300; --warn-bg: #f6e2c2; --bad: #8f1d0f; --bad-bg: #f5d6cf;
+}
+:root[data-theme="jamun"] {
+  /* Jamun: the dark of the Indian blackberry, with kesar (saffron) for action and rani pink at the top of the relevance scale. */
+  --accent: #ffa149; --accent-ink: #ffb46b; --on-accent: #1c0f12; --amber: #ffb46b;
+  --bg: #170b1b; --surface: #1f1024; --raised: #2a1631; --line: #3a2443; --text: #f1e6dc; --muted: #b6a3b3; --hover: #22142a; --track: #2b1b31; --shadow: 0 10px 30px rgba(0,0,0,.55);
+  --ok: #b6e08a; --ok-bg: #22301a; --warn: #ffc98a; --warn-bg: #3a2216; --bad: #ff9fb5; --bad-bg: #3d1424;
+}
+:root[data-theme="lacquer"] {
+  /* Lacquer: oxblood black with jade, the pairing of old cinnabar boxes. Calm for long evenings. */
+  --accent: #4cc9a0; --accent-ink: #63d6b0; --on-accent: #08130f; --amber: #e8b04a;
+  --bg: #130908; --surface: #1b0e0c; --raised: #261412; --line: #3b1f1b; --text: #f2e8dd; --muted: #bfa79c; --hover: #24120f; --track: #2e1814; --shadow: 0 10px 30px rgba(0,0,0,.55);
+  --ok: #8fdcb9; --ok-bg: #12291f; --warn: #f0c27a; --warn-bg: #34200f; --bad: #f6a99a; --bad-bg: #3e1510;
+}
 :root[data-theme="oled"] {
   --accent: #f7b538; --accent-ink: #f7b538; --bg: #000; --surface: #070504; --raised: #110c07; --line: #21170e; --text: #dccfb7; --muted: #9a8b74; --hover: #130e08; --track: #1a1209; --shadow: 0 0 0 1px #21170e;
   --ok: #c4e08a; --ok-bg: #141a07; --warn: #f7c97a; --warn-bg: #241806; --bad: #f5b3a6; --bad-bg: #2a0e08;
 }
 * { box-sizing: border-box; }
 html { color-scheme: light; scroll-behavior: smooth; }
-:root[data-theme="dark"], :root[data-theme="oled"] { color-scheme: dark; }
+:root[data-theme="dark"], :root[data-theme="oled"], :root[data-theme="jamun"], :root[data-theme="lacquer"] { color-scheme: dark; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--ui); font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -491,3 +509,33 @@ html { scroll-padding-bottom: 90px; }
 .rdline svg { flex: none; margin-top: 2px; color: var(--accent-ink); }
 .rdline a { color: var(--accent-ink); }
 .rdline em { color: var(--text); }
+
+
+/* ---------- 0.8.0 design layer ---------- */
+/* A finer edge on the relevance strip: a soft glow in the article's own grade, so the eye can run down the left edge and see the day's heat. */
+.row .strip { box-shadow: 0 0 14px -2px color-mix(in srgb, var(--grade, var(--accent)) 55%, transparent); }
+.row[data-read="true"] .strip { box-shadow: none; }
+/* The open card already carries the title and summary, so the row above it keeps only its meta line and actions. */
+.row[data-card="true"] { content-visibility: visible; }
+.row[data-card="true"] > .rmain > .rtitle, .row[data-card="true"] > .rmain > .rsnip, .row[data-card="true"] > .rmain > .chips { display: none; }
+/* Score chip: tabular numbers so a column of scores lines up. */
+.grade .score { font-variant-numeric: tabular-nums; }
+.rside { justify-content: flex-end; }
+
+/* Ultrawide: the list keeps a readable width on the left and the open article reads in its own pane on the right.
+   Nothing moves in the page's logic; the card simply stays fixed beside the list. */
+@media (min-width: 1800px) {
+  .main { --pane: min(46vw, 1040px); }
+  .main:has(> .feeds) { padding-right: calc(var(--pane) + 28px); }
+  .row[data-card="true"] .cardwrap { position: fixed; top: 52px; right: 0; bottom: 0; width: var(--pane); z-index: 20; display: block; overflow-y: auto; overscroll-behavior: contain;
+    background: var(--surface); border-left: 1px solid var(--line); box-shadow: -18px 0 40px -28px rgba(0,0,0,.6); animation: pv-pane-in .22s var(--ease); }
+  .row[data-card="true"] .cardin { overflow: visible; }
+  .row[data-card="true"] .card { border: 0; border-radius: 0; margin: 0; padding: 36px clamp(28px, 4vw, 72px) 120px; background: transparent; box-shadow: none; }
+  .row[data-card="true"] > .rmain > .rtitle, .row[data-card="true"] > .rmain > .rsnip { display: block; }
+  .feeds:not(:has(.row[data-card="true"]))::after {
+    content: "Open an article with o or a click, and it reads here.\A j and k move through the list."; white-space: pre-line;
+    position: fixed; top: 52px; right: 0; bottom: 0; width: var(--pane, 46vw); display: grid; place-content: center; text-align: center;
+    color: var(--muted); font-family: var(--read-font); font-size: 18px; line-height: 1.8; border-left: 1px solid var(--line);
+    background: radial-gradient(60% 50% at 50% 45%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 70%), var(--bg); pointer-events: none; }
+}
+@keyframes pv-pane-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }

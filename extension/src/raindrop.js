@@ -1,5 +1,5 @@
 // Raindrop client: read your tags and notes to build the centroid; optional one-way save.
-import { PlainError } from "./webdav.js";
+import { PlainError, deadline, timedOut } from "./webdav.js";
 import { domainOf } from "./text.js";
 
 export class Raindrop {
@@ -7,9 +7,11 @@ export class Raindrop {
   async call(method, path, body) {
     let res;
     try {
-      res = await this.fetch("https://api.raindrop.io/rest/v1" + path, { method, headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-    } catch { throw new PlainError("Could not reach Raindrop. Tag matching will use the copy saved on this machine.", "unreachable"); }
+      res = await this.fetch("https://api.raindrop.io/rest/v1" + path, { method, headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined, signal: deadline() });
+    } catch (e) {
+      if (timedOut(e)) throw new PlainError("Raindrop did not answer in time. Tag matching uses the copy saved on this machine.", "timeout"); throw new PlainError("Could not reach Raindrop. Tag matching will use the copy saved on this machine.", "unreachable"); }
     if (res.status === 401) throw new PlainError("Raindrop refused the token. Create a new test token at Raindrop's developer settings and enter it in Settings.", "auth");
+    if (res.status === 429) throw new PlainError("Raindrop is limiting requests for a minute. The copy saved on this machine is used meanwhile.", "rate-limit");
     if (!res.ok) throw new PlainError(`Raindrop answered with an unexpected reply (${res.status}).`, "bad-reply");
     return await res.json();
   }

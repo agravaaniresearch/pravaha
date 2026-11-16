@@ -37,16 +37,27 @@ const RECENT_MS = 10 * 60000;
 const RECENT_TRIES = 3;
 const QUIET_MS = 1500;
 
+// Storage writes. Small keys are written at once. The three heavy ones (the article copy, the history log and the search index,
+// together several megabytes) are written a moment later, together, and only when their content really changed, so an idle poll
+// writes nothing at all. Durability does not depend on the delay: changes for Miniflux wait in pendingOps (small, written at once),
+// and this machine's newest history lines are written at once as a short tail.
+const HEAVY = new Set(["cache", "events", "searchIndex"]);
+const DEFER_MS = 1200;
+const FEEDS_EVERY_MS = 15 * 60000;
+const cacheJson = (c) => JSON.stringify(c, (k, v) => (k === "lastChangeTs" ? undefined : v)); // the poll cursor lives in "marks"
+const hashStr = (str) => { let h = 2166136261 >>> 0; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + ":" + str.length; };
+const seqOf = (e) => Number(String(e.eid).split(":")[1]) || 0;
 const roundBreakdown = (b) => { const o = {}; for (const [k, v] of Object.entries(b || {})) o[k] = typeof v === "number" ? Math.round(v * 1000) / 1000 : v; return o; };
 export class Engine {
   constructor({ storage, now = () => Date.now(), fetchImpl, platform = {}, onChange = () => {} }) {
     this.storage = storage; this.now = now; this.fetchImpl = fetchImpl; this.platform = platform; this.onChange = onChange;
     this.sessionFeeds = new Set(); this._settled = new Map(); this._timers = new Set(); this.activity = null; this._muted = false; this._mutedAt = 0; this._heldChange = false; this.searchIndex = {}; this._vecs = new Map(); this._model = null; this._derived = null;
+    this._deferred = new Set(); this._deferTimer = null; this._saved = { cache: null, events: null, ownSeq: 0 }; this._base = null;
   }
 
   // ---------- persistence ----------
   async load() {
-    const s = await this.storage.get(["settings", "cache", "events", "syncState", "pendingOps", "raindropCache", "echoLocal", "enrichment", "net", "others", "pendingHistory", "bodies", "icons", "searchIndex", "server"]);
+    const s = await this.storage.get(["settings", "cache", "events", "eventsTail", "marks", "syncState", "pendingOps", "raindropCache", "echoLocal", "enrichment", "net", "others", "pendingHistory", "bodies", "icons", "searchIndex", "server"]);
     this.settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
     this.settings.miniflux = { ...DEFAULT_SETTINGS.miniflux, ...(this.settings.miniflux || {}) };
     this.settings.webdav = { ...DEFAULT_SETTINGS.webdav, ...(this.settings.webdav || {}) };
@@ -60,11 +71,16 @@ export class Engine {
     if (!this.settings.device || (this.settings.device === "this-machine" && untouched)) { this.settings.device = "browser-" + randomId(5); fresh = true; }
     if (!this.settings.installId) { this.settings.installId = randomId(12); fresh = true; }
     this.cache = { items: {}, feeds: [], lastChangeTs: 0, lastDigestAt: 0, lastDigestTerms: [], ...(s.cache || {}) };
+    this.marks = { feedsAt: 0, outboxAt: 0, outboxSig: "", ...(s.marks || {}) };
+    if (this.marks.lastChangeTs > (this.cache.lastChangeTs || 0)) this.cache.lastChangeTs = this.marks.lastChangeTs;
     this.pendingOps = (s.pendingOps || []).map(o => ({ ...o, inflight: false })); this.raindropCache = s.raindropCache || null; this.echoLocal = s.echoLocal || null;
     this.enrichment = s.enrichment || {}; this.net = s.net || { miniflux: {}, webdav: {}, raindrop: {} };
     this.searchIndex = s.searchIndex || {}; this.bodies = s.bodies || {}; this.icons = s.icons || {}; this.sessionCards = new Set(); this.others = s.others || {}; this.pendingHistory = s.pendingHistory || [];
     this.log = new EventLog(this.settings.device, new Clock(this.settings.device, this.now));
     this.log.merge(s.events || []);
+    this._saved.ownSeq = (s.events || []).reduce((m, e) => (e && e.device === this.settings.device ? Math.max(m, seqOf(e)) : m), 0);
+    this.log.merge(s.eventsTail || []);
+    this._saved.events = this._eventsSig(); this._saved.cache = s.cache ? hashStr(cacheJson(this.cache)) : null;
     this.syncState = s.syncState || freshSyncState(); this.server = loadServer(s.server);
     this._wire();
     this._invalidate();
@@ -79,12 +95,34 @@ export class Engine {
     this.mf = m.url && m.token ? new Miniflux({ baseUrl: m.url, token: m.token, fetchImpl: this.fetchImpl }) : null;
     this.rd = this.settings.raindrop.token ? new Raindrop({ token: this.settings.raindrop.token, fetchImpl: this.fetchImpl }) : null;
   }
-  async persist(keys) {
-    const all = { settings: this.settings, cache: this.cache, events: this.log.list(), syncState: this.syncState, pendingOps: this.pendingOps, raindropCache: this.raindropCache, echoLocal: this.echoLocal, enrichment: this.enrichment, net: this.net, others: this.others, pendingHistory: this.pendingHistory, server: this.server };
-    all.searchIndex = this.searchIndex;
-    const out = {}; for (const k of keys || Object.keys(all).filter(x => x !== "searchIndex" || this._idxDirty)) out[k] = all[k];
-    if (out.searchIndex) this._idxDirty = false;
-    await this.storage.set(out);
+  _eventsSig() { return this.log.count() + "|" + (this.log.head() || ""); }
+  // Writes the small keys now and schedules the heavy ones. With no list, everything is written (only first-time setup and imports do that).
+  async persist(keys, { immediate = false } = {}) {
+    const all = { settings: this.settings, syncState: this.syncState, pendingOps: this.pendingOps, raindropCache: this.raindropCache, echoLocal: this.echoLocal, enrichment: this.enrichment, net: this.net, others: this.others, pendingHistory: this.pendingHistory, server: this.server, marks: this.marks };
+    const list = keys || [...Object.keys(all), ...HEAVY];
+    const out = {}; let heavy = false;
+    for (const k of list) {
+      if (HEAVY.has(k)) { this._deferred.add(k); heavy = true; continue; }
+      if (k in all) out[k] = all[k];
+    }
+    if (this._deferred.has("events")) { const tail = this.log.own().filter(e => seqOf(e) > this._saved.ownSeq); if (tail.length || keys === undefined) out.eventsTail = tail; }
+    if (Object.keys(out).length) await this.storage.set(out);
+    if (heavy) { if (immediate || !keys) await this.flushPersist(); else this._scheduleFlush(); }
+  }
+  _scheduleFlush() {
+    if (this._deferTimer) return;
+    this._deferTimer = setTimeout(() => { this._deferTimer = null; this.flushPersist().catch(() => {}); }, DEFER_MS);
+    if (this._deferTimer && this._deferTimer.unref) this._deferTimer.unref();
+  }
+  // Writes the heavy keys that were asked for, skipping any whose content is the same as the last write.
+  async flushPersist() {
+    if (this._deferTimer) { clearTimeout(this._deferTimer); this._deferTimer = null; }
+    const want = [...this._deferred]; this._deferred.clear(); const out = {};
+    if (want.includes("cache")) { const h = hashStr(cacheJson(this.cache)); if (h !== this._saved.cache) { out.cache = this.cache; this._saved.cache = h; } }
+    if (want.includes("events")) { const sig = this._eventsSig(); if (sig !== this._saved.events) { out.events = this.log.list(); out.eventsTail = []; this._saved.events = sig; this._saved.ownSeq = this.log.seq; } }
+    if (want.includes("searchIndex") && this._idxDirty) { out.searchIndex = this.searchIndex; this._idxDirty = false; }
+    if (Object.keys(out).length) await this.storage.set(out);
+    return Object.keys(out);
   }
   async saveSettings(patch) {
     const prevDevice = this.settings.device;
@@ -95,30 +133,41 @@ export class Engine {
       sync: { ...this.settings.sync, ...(patch.sync || {}) }, syncMeta: { ...this.settings.syncMeta, ...(patch.syncMeta || {}) }, ui: patch.ui !== undefined ? patch.ui : this.settings.ui };
     if (this.settings.device !== prevDevice) {
       const events = this.log.list(); this.log = new EventLog(this.settings.device, new Clock(this.settings.device, this.now)); this.log.merge(events);
-      this.syncState = freshSyncState();
+      this.syncState = freshSyncState(); this._saved.ownSeq = 0; this._saved.events = null;
     }
-    this._wire(); this._invalidate(); await this.persist(); this._notify();
+    this._wire(); this._invalidate(); await this.persist(this.settings.device !== prevDevice ? ["settings", "syncState", "events"] : ["settings"], { immediate: true }); this._notify();
   }
-  _invalidate() { this._model = null; this._derived = null; this._vecs.clear(); }
+  // _invalidate: the vocabulary may have changed (new Raindrop copy, new echo, settings), so everything derived from text is rebuilt.
+  _invalidate() { this._base = null; this._model = null; this._derived = null; this._vecs.clear(); }
 
   // ---------- model ----------
   _derive() { if (!this._derived) this._derived = derive(this.log.list(), this.now()); return this._derived; }
-  _buildModel() {
-    if (this._model) return this._model;
+  // The expensive part (vocabulary, one vector per Raindrop save, tag profiles) is built once per Raindrop copy.
+  // The interest profile and the echo are cheap and are rebuilt whenever the history changes.
+  _buildBase() {
+    if (this._base) return this._base;
     const bms = (this.raindropCache && this.raindropCache.bookmarks) || [];
     const corpus = new Corpus();
     const text = (b) => `${(b.tags || []).join(" ")} ${(b.tags || []).join(" ")} ${b.note || ""} ${b.title || ""} ${b.excerpt || ""}`;
-    for (const b of bms) corpus.add(tokenize(text(b)));
-    if (corpus.n < 20) for (const it of Object.values(this.cache.items)) corpus.add(tokenize(`${it.title} ${it.summary}`));
+    const toks = bms.map(b => tokenize(text(b)));
+    for (const t of toks) corpus.add(t);
+    const fromItems = corpus.n < 20; // too few saves for a vocabulary of their own: borrow the articles, and rebuild after each refresh
+    if (fromItems) for (const it of Object.values(this.cache.items)) corpus.add(tokenize(`${it.title} ${it.summary}`));
     const now = this.now();
-    const vecs = bms.map(b => corpus.vector(tokenize(text(b))));
+    const vecs = toks.map(t => corpus.vector(t));
     const weights = bms.map(b => Math.pow(0.5, Math.max(0, now - (b.at || now)) / (365 * DAY)));
-    let centroid = prune(mean(vecs, weights), 500);
+    const bmByUrl = new Map(); bms.forEach((b, i) => { const c = canonicalUrl(b.link); if (c && !bmByUrl.has(c)) bmByUrl.set(c, i); });
+    this._base = { corpus, fromItems, baseCentroid: prune(mean(vecs, weights), 500), profiles: buildTagProfiles(bms, corpus), bms, bmVecs: vecs, bmByUrl };
+    return this._base;
+  }
+  _buildModel() {
+    if (this._model) return this._model;
+    const b = this._buildBase(); const corpus = b.corpus;
+    let centroid = b.baseCentroid;
     const d = this._derive();
     for (const p of d.pulls) centroid = blend(centroid, corpus.vector(p.terms), p.kind === "save" ? 0.12 : p.kind === "up" ? 0.08 : p.kind === "card" ? 0.02 : 0.05);
     const echo = this._echoMerged(corpus);
-    const bmByUrl = new Map(); bms.forEach((b, i) => { const c = canonicalUrl(b.link); if (c && !bmByUrl.has(c)) bmByUrl.set(c, i); });
-    this._model = { corpus, centroid, echo: echo.vec, domainVisits: echo.domainVisits, profiles: buildTagProfiles(bms, corpus), bms, bmVecs: vecs, bmByUrl };
+    this._model = { ...b, centroid, echo: echo.vec, domainVisits: echo.domainVisits };
     return this._model;
   }
   _echoMerged(corpus) {
@@ -129,11 +178,14 @@ export class Engine {
     const domainVisits = {}; for (const s of srcs) for (const [d, n] of Object.entries(s.domainCounts || {})) domainVisits[d] = (domainVisits[d] || 0) + n;
     return { vec: mean(srcs.map(s => s.vec || {})), domainVisits };
   }
+  // Article vectors are kept between refreshes and rebuilt only when the article's text changed (or the vocabulary did, which clears them all).
   _itemVec(it) {
-    let v = this._vecs.get(it.id);
-    if (!v) { const m = this._buildModel(); const vec = m.corpus.vector(tokenize(`${it.title} ${it.title} ${it.summary}`)); v = { vec, stems: topTerms(vec, 12) }; this._vecs.set(it.id, v); }
+    const sig = `${it.title}|${(it.summary || "").length}|${(it.tags || []).join(",")}|${it.url}`;
+    let v = this._vecs.get(it.id); if (v && v.sig !== sig) v = null;
+    if (!v) { const m = this._buildModel(); const vec = m.corpus.vector(tokenize(`${it.title} ${it.title} ${it.summary}`)); v = { vec, stems: topTerms(vec, 12), sig }; this._vecs.set(it.id, v); if (this._vecs.size > 2 * Object.keys(this.cache.items).length + 500) this._pruneVecs(); }
     return v;
   }
+  _pruneVecs() { for (const id of this._vecs.keys()) if (!this.cache.items[id]) this._vecs.delete(id); }
   _scoreCtx() {
     const m = this._buildModel(), d = this._derive();
     return { weights: normaliseWeights(this.settings.weights), centroid: m.centroid, echo: m.echo, domainVisits: m.domainVisits, authorityDelta: d.authorityDelta,
@@ -308,14 +360,17 @@ export class Engine {
     if ((starred.entries || []).length < 250) for (const it of Object.values(this.cache.items)) if (it.starred && !starIds.has(it.id) && !pend.has(it.id)) it.starred = false;
   }
 
-  async refresh() {
+  // The feed list (names, folders, health) changes rarely and is the largest routine answer, so a quiet poll reads it every fifteen minutes,
+  // and at once when an article names a feed this machine does not know yet.
+  _feedsDue(force) { return force || !this.cache.feeds.length || this.now() - (this.marks.feedsAt || 0) > FEEDS_EVERY_MS; }
+  async refresh({ feeds = true } = {}) {
     if (!this.mf) return;
     const col = collector(); this.mf.stats.calls = 0; this.mf.stats.bytes = 0; let mode = "full";
     try {
       await this.flushOps();
       const t0 = this.now(); this._act("pull", "Reading from Miniflux");
       await this._checkServer();
-      this._applyFeeds(await this.mf.feeds(), col);
+      if (this._feedsDue(feeds)) { this._applyFeeds(await this.mf.feeds(), col); this.marks.feedsAt = this.now(); }
       // Anything we sent while this fetch was running may be missing from the snapshot, so it counts as pending too.
       const pend = this._pendingIds(); for (const [id, t] of this._settled) if (t > t0) pend.add(id);
       const recent = this.cache.recent || (this.cache.recent = {}); for (const id of Object.keys(recent)) if (this.now() - recent[id].t > RECENT_MS || recent[id].n >= RECENT_TRIES) delete recent[id];
@@ -323,17 +378,19 @@ export class Engine {
       if (this.server.caps.entryIds !== false) light = await this._pullUnreadLight(pend, col);
       if (light) mode = "light"; else await this._pullUnreadFull(pend, col);
       await this._pullStars(pend, col);
-      if (this.cache.lastChangeTs) {
+      // The light pull already reconciles read and saved state by number, so the "changed since" download (full article bodies) is needed only after a full one.
+      if (this.cache.lastChangeTs && !light) {
         for (const e of await this.mf.changedSince(this.cache.lastChangeTs)) { if (pend.has(e.id)) continue; if (badEntry(e)) { col.note("articles", badEntry(e)); continue; } if (this.cache.items[e.id] || e.status === "unread") this.cache.items[e.id] = this._norm(e, this.cache.items[e.id]); }
       }
-      this.cache.lastChangeTs = Math.floor(this.now() / 1000) - 5;
+      this.cache.lastChangeTs = Math.floor(this.now() / 1000) - 5; this.marks.lastChangeTs = this.cache.lastChangeTs;
+      const known = new Set(this.cache.feeds.map(f => f.id)); if (Object.values(this.cache.items).some(it => it.status === "unread" && !known.has(it.feedId))) { this._applyFeeds(await this.mf.feeds(), col); this.marks.feedsAt = this.now(); }
       this._retain(); this._reindex();
       if (this.pendingOps.length) await this.flushOps();
-      this._netOk("miniflux"); this._vecs.clear();
+      this._netOk("miniflux"); if (this._base && this._base.fromItems) this._invalidate();
       this.net.miniflux = { ...this.net.miniflux, mode, calls: this.mf.stats.calls, bytes: this.mf.stats.bytes };
     } catch (e) { this._netErr("miniflux", e); }
     col.done(this.server, this.now()); this._actEnd("pull");
-    await this.persist(["cache", "net", "pendingOps", "searchIndex", "server"]);
+    await this.persist(["cache", "net", "pendingOps", "searchIndex", "server", "marks"]);
   }
   _retain() {
     const cut = this.now() - this.settings.retentionDays * DAY; const d = this._derive();
@@ -362,7 +419,7 @@ export class Engine {
       const t = tokenize(d.title); if (t.length) { vecs.push(corpus.vector(t)); w.push(1 + Math.log(1 + (d.visits || 1))); }
     }
     this.echoLocal = { at: this.now(), vec: prune(mean(vecs, w), 300), domainCounts };
-    this._invalidate(); await this.persist(["echoLocal"]);
+    this._model = null; await this.persist(["echoLocal"]);
   }
 
   // ---------- sync ----------
@@ -382,24 +439,37 @@ export class Engine {
           this.imported = { at: this.now(), events: r.pulled, devices: r.devices, fresh: fresh.length > 0 };
           if (fresh.length) await this.storage.set({ seenDevices: [...seen, ...fresh] });
         }
-        if (r.ok) { this._netOk("webdav"); this.others = r.others; this._invalidate(); await this._enrich(); await this._autoDigest(); }
+        if (r.ok) {
+          this._netOk("webdav");
+          const echoSig = (o) => hashStr(JSON.stringify(Object.keys(o || {}).sort().map(k => [k, o[k] && o[k].echo])));
+          if (echoSig(r.others) !== echoSig(this.others)) this._model = null;
+          this.others = r.others; if (r.pulled > 0) { this._derived = null; this._model = null; }
+          await this._enrich(); await this._autoDigest();
+        }
         else this._netErr("webdav", new PlainError(r.error.plain, r.error.code));
         this.nameClash = this.syncer.nameClash || null;
         this.pendingHistory.push({ at: this.now(), pending: this.syncer.pending().length }); this.pendingHistory = this.pendingHistory.slice(-120);
       }
-      await this.persist();
+      // The heavy keys first, then the sync record that says which remote history was applied, so a crash in between can only cause a re-read, never a loss.
+      this._deferred.add("cache"); this._deferred.add("events"); this._deferred.add("searchIndex"); await this.flushPersist();
+      await this.persist(["syncState", "others", "pendingHistory", "net", "enrichment", "marks", "pendingOps", "server"]);
     } finally {
       const announce = !quiet || !this._muted || this.signature() !== before; this._muted = false; this._heldChange = false;
       if (announce) this.onChange();
     }
   }
+  // The outside-scoring files are read and written at most once an hour, and the outbox only when its list of articles changed.
   async _enrich() {
+    if (this.now() - (this.marks.outboxAt || 0) < 3600000) return;
     try {
       const root = this.settings.webdav.root || "pravaha";
       const res = await this.dav.get(`${root}/enrich/results.json`);
       if (res) this.enrichment = parseResults(res).map;
       const scored = this._unreadScored();
-      await this.dav.put(`${root}/enrich/outbox.json`, JSON.stringify(buildOutbox({ items: scored.map(s => ({ ...s.it, score: s.s.score })), centroidTerms: topTerms(this._buildModel().centroid, 30), now: this.now() }), null, 1));
+      const box = buildOutbox({ items: scored.map(s => ({ ...s.it, score: s.s.score })), centroidTerms: topTerms(this._buildModel().centroid, 30), now: this.now() });
+      const sig = hashStr(JSON.stringify(box.items.map(i => i.id)));
+      if (sig !== this.marks.outboxSig) { await this.dav.put(`${root}/enrich/outbox.json`, JSON.stringify(box, null, 1)); this.marks.outboxSig = sig; }
+      this.marks.outboxAt = this.now();
     } catch { /* enrichment is optional; failures here must not mark the sync as failed */ }
   }
   async _autoDigest() { if (this.settings.autoDigest && this.now() - this.cache.lastDigestAt > DAY) await this.writeDigest().catch(() => {}); }
@@ -507,7 +577,7 @@ export class Engine {
     for (const id of ids) { const it = this.cache.items[id]; if (!it || it.status === "read") continue; it.status = "read"; flipped.push(id); if (explicit && ids.length === 1) this._evt(it, "read_no_open"); }
     const changed = flipped.length;
     if (!ids.length) return { count: 0, changed: 0, ids: [], verified: true, retried: 0, failed: 0, pending: this._remaining() };
-    this._queue({ op: "status", ids: [...ids], status: "read" }); await this.persist(); this._notify(); await this.flushOps(); this._notify();
+    this._queue({ op: "status", ids: [...ids], status: "read" }); await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
     const res = { count: ids.length, changed, ids: flipped, verified: false, retried: 0, failed: 0, pending: this._remaining() };
     if (verify === undefined ? ids.length >= 25 : verify) Object.assign(res, await this._verifyRead(ids));
     return res;
@@ -542,7 +612,7 @@ export class Engine {
   }
   async markUnread(ids) {
     for (const id of ids) { const it = this.cache.items[id]; if (it) it.status = "unread"; }
-    this._queue({ op: "status", ids: [...ids], status: "unread" }); await this.persist(); this._notify(); await this.flushOps(); this._notify();
+    this._queue({ op: "status", ids: [...ids], status: "unread" }); await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
     return { count: ids.length, pending: this._remaining() };
   }
   // The reader opened the article as an in-page card. A light positive signal, logged once per session.
@@ -551,7 +621,7 @@ export class Engine {
     if (!this.sessionCards.has(id)) { this.sessionCards.add(id); this._evt(it, "card"); }
     this.sessionFeeds.add(it.feedId);
     if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
-    await this.persist(); this._notify(); await this.flushOps(); this._notify();
+    await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
   }
   // ---------- local search ----------
   // The index is a compact record of every article seen: title, feed, tags, a short summary and about fourteen
@@ -805,7 +875,7 @@ export class Engine {
     for (let i = 0; i < need.length; i += 5) {
       await Promise.all(need.slice(i, i + 5).map(async (f) => {
         try { const r = await this.mf.feedIcon(f.id); this.icons[f.id] = r && ICON_RE.test(r.data || "") ? "data:" + r.data : ""; }
-        catch (e) { if (e.code === "bad-reply") this.icons[f.id] = ""; }
+        catch (e) { if (e && e.code !== "unreachable" && e.code !== "timeout" && e.code !== "auth") this.icons[f.id] = ""; } // a refused icon is not asked for again every poll
       }));
     }
     await this.storage.set({ icons: this.icons });
@@ -815,7 +885,7 @@ export class Engine {
     const it = this.cache.items[id]; if (!it) return null;
     this._evt(it, "open"); this.sessionFeeds.add(it.feedId);
     if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
-    await this.persist(); this._notify(); this.flushOps().then(() => this._notify());
+    await this.persist(["cache", "events", "pendingOps"]); this._notify(); this.flushOps().then(() => this._notify());
     return { url: it.url, feedId: it.feedId };
   }
   async recordDwell(entryId, feedId, ms) {
@@ -831,14 +901,14 @@ export class Engine {
       if (this.settings.autoTag) tags = this.suggestTagsFor(id).map(t => t.tag);
       this.rd.save({ link: it.url, title: it.title, tags }).then(() => this._netOk("raindrop")).catch(e => { this._netErr("raindrop", e); this._notify(); });
     }
-    await this.persist(); this._notify(); await this.flushOps(); this._notify();
+    await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
     return { saved: it.starred, tags };
   }
   async dismiss(id) {
     const it = this.cache.items[id]; if (!it) return;
     this._evt(it, "dismiss");
     if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
-    await this.persist(); this._notify(); await this.flushOps(); this._notify();
+    await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
   }
   async undismissAll() {
     const d = this._derive();
@@ -848,7 +918,7 @@ export class Engine {
     const back = [...d.dismissed].filter(id => this.cache.items[id] && this.cache.items[id].status === "read");
     for (const id of back) this.cache.items[id].status = "unread";
     if (back.length) this._queue({ op: "status", ids: back, status: "unread" });
-    await this.persist(); this._notify(); await this.flushOps(); this._notify();
+    await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
   }
   async train(type, key, value) { return this.trainMany([{ type, key, value }]); }
   // Several rules at once, written as separate events so that older copies of Pravaha still understand every one of them.

@@ -6,7 +6,13 @@ import { FeedDetect } from "./src/feeddetect.js";
 
 const storage = { get: (k) => browser.storage.local.get(k), set: (o) => browser.storage.local.set(o) };
 const dwell = new DwellTracker();
-let syncing = false;
+let syncing = 0; // the time the running sync started, or 0
+// With no reader tab open nobody is looking, so a poll runs at most every ten minutes; the toolbar mark still updates.
+const IDLE_POLL_MS = 10 * 60000;
+async function readerOpen() {
+  try { if (browser.extension && browser.extension.getViews) return browser.extension.getViews({ type: "tab" }).some(w => w.location.pathname.endsWith("/ui/reader.html")); } catch { /* fall through */ }
+  return (await browser.tabs.query({ url: browser.runtime.getURL("ui/reader.html") })).length > 0;
+}
 
 function flattenBookmarks(nodes, out = []) {
   for (const n of nodes) { if (n.url) out.push({ title: n.title, url: n.url, visits: 1 }); if (n.children) flattenBookmarks(n.children, out); }
@@ -61,12 +67,21 @@ async function schedule() {
 }
 async function saveDwell() { try { await browser.storage.session.set({ dwell: dwell.snapshot() }); } catch { /* ignore */ } }
 async function runSync(opts) {
-  if (syncing) return; syncing = true;
-  try { await engine.syncNow(opts); } finally { syncing = false; }
+  // Every request has a deadline, so a sync cannot hang; the five-minute guard is a second line of defence.
+  if (syncing && Date.now() - syncing < 5 * 60000) return; syncing = Date.now();
+  try { await engine.syncNow(opts); } finally { syncing = 0; }
 }
 
 // Firefox may not wake this page when Sync delivers data, so every poll also looks at Firefox Sync's storage (a local read, no network).
-browser.alarms.onAlarm.addListener(async (a) => { if (a.name === "poll") { await ready; try { await profile.pull(); } catch { /* shown on the Move setup tab */ } await runSync({ quiet: true }); } });
+browser.alarms.onAlarm.addListener(async (a) => {
+  if (a.name !== "poll") return; await ready;
+  try { await profile.pull(); } catch { /* shown on the Move setup tab */ }
+  const last = (engine.net.miniflux && engine.net.miniflux.lastOkAt) || 0;
+  if (!(await readerOpen().catch(() => true)) && Date.now() - last < IDLE_POLL_MS && !engine.pendingOps.length) return;
+  await runSync({ quiet: true });
+});
+// Firefox unloads this page when it is idle; the heavy keys waiting for their short delay are written first.
+if (browser.runtime.onSuspend) browser.runtime.onSuspend.addListener(() => { engine.flushPersist().catch(() => {}); });
 browser.runtime.onInstalled.addListener(async () => { await ready; await schedule(); });
 browser.runtime.onStartup.addListener(async () => { await ready; await runSync(); });
 ready.then(badgeSoon).catch(() => {});

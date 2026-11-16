@@ -101,6 +101,7 @@ test("digest and enrichment files are written to WebDAV; external scores are ble
   const outbox = JSON.parse(w.dav.files.get("pravaha/enrich/outbox.json")); assert.equal(outbox.version, 1);
   const base = e.getView({ ranked: true }).groups[0].rows.find(r => r.id === 2).score;
   w.dav.files.set("pravaha/enrich/results.json", JSON.stringify({ version: 1, results: [{ id: 2, score: 1, flag: "serendipity" }] }));
+  e.marks.outboxAt = 0; // an hour later: the outside-scoring files are read at most hourly from 0.8.0
   await e.syncNow(); const row = e.getView({ ranked: true }).groups[0].rows.find(r => r.id === 2); assert.ok(row.score > base); assert.equal(row.flag, "serendipity");
 });
 test("renaming the machine keeps history and starts a fresh sync position", async () => {

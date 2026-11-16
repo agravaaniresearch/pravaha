@@ -1,9 +1,9 @@
 // Pravaha reader. Text is inserted as text nodes; article HTML goes through renderSafe, never innerHTML.
 import { h, icon, pct, ago, longAgo } from "./dom.js";
-import { gradeColor, disp } from "../src/grade.js";
+import { gradeColor, disp, PALETTE_NAMES, THEME_PALETTE } from "../src/grade.js";
 import { renderSafe } from "../src/safehtml.js";
 import { anchorTree } from "../src/anchor.js";
-import { loadPrefs, normalisePrefs, savePrefs, applyPrefs, clamp, READ_FONTS, UI_FONTS, FONT_INFO, CONFIRM_MODES } from "./prefs.js";
+import { loadPrefs, normalisePrefs, savePrefs, applyPrefs, clamp, READ_FONTS, UI_FONTS, FONT_INFO, CONFIRM_MODES, THEME_IDS } from "./prefs.js";
 
 const $app = document.getElementById("app");
 const MUTATING = new Set(["markRead", "markUnread", "markScope", "save", "dismiss", "undismissAll", "syncNow", "subscribe", "searchServer", "card", "open", "feedUpdate", "feedDelete", "folderRename", "refreshScope", "rate", "train"]);
@@ -612,7 +612,9 @@ function observeRows() {
 
 // ---------- chrome: header, sidebar, popovers ----------
 const TABS = [["feed", "Newsfeed", "list"], ["saved", "Saved", "star"], ["stats", "Stats", "chart"], ["sync", "Sync", "sync"], ["settings", "Settings", "gear"]];
-const THEMES = ["light", "dark", "oled", "auto"]; const THEME_NAMES = { light: "Light", dark: "Dark", oled: "OLED black", auto: "Follow the system" };
+const THEMES = THEME_IDS; const THEME_NAMES = { light: "Light", khadi: "Khadi (cotton and sindoor)", dark: "Dark", jamun: "Jamun (plum and saffron)", lacquer: "Lacquer (oxblood and jade)", oled: "OLED black", auto: "Follow the system" };
+// Choosing one of the 0.8.0 themes also takes its matching relevance colours, unless you then pick others.
+const themePatch = (t) => (THEME_PALETTE[t] && THEME_PALETTE[t] !== "ember" ? { theme: t, palette: THEME_PALETTE[t] } : { theme: t });
 function go(tab) {
   S.lastSheet = null;
   stopDwell(); dw.id = null; S.openCard = null; S.tab = tab; lsSet("pravaha.tab", tab); S.keep = new Set(); S.pop = null;
@@ -622,7 +624,7 @@ function go(tab) {
   else { S.draft = null; render(); }
 }
 function topBar() {
-  const themeIcon = { light: icon("sun"), dark: icon("moon"), oled: icon("moon", 18, true), auto: icon("clock") }[U.theme];
+  const themeIcon = { light: icon("sun"), khadi: icon("sun", 18, true), dark: icon("moon"), jamun: icon("palette"), lacquer: icon("palette"), oled: icon("moon", 18, true), auto: icon("clock") }[U.theme] || icon("moon");
   return h("header", { class: "top" }, progressEl(),
     h("button", { class: "ibtn", title: "Show or hide the folder list", "aria-label": "Toggle folders", onclick: () => { setPref({ side: !U.side }); renderChrome(); } }, icon("menu", 20)),
     h("div", { class: "brand" }, h("img", { src: "../icons/icon-32.png", alt: "" }), "Pravaha"),
@@ -631,7 +633,7 @@ function topBar() {
     isFeedTab() ? h("label", { class: "search" }, icon("search", 15), h("input", { type: "search", placeholder: "Search everything  ( / )", "aria-label": "Search articles", value: S.q, oninput: debounce((e) => { S.q = e.target.value; loadView(); }, 260) })) : null,
     h("button", { class: "ibtn bionic", "aria-pressed": String(U.anchor), title: "Bionic reading: bold the start of each word (Shift+B)", "aria-label": "Bionic reading", onclick: toggleBionic }, h("b", {}, "B"), h("span", {}, "r")),
     h("button", { class: "ibtn aa", title: "Reading type", "aria-label": "Reading type", "aria-expanded": String(S.pop === "aa"), onclick: (e) => { e.stopPropagation(); S.pop = S.pop === "aa" ? null : "aa"; renderPop(); } }, "Aa"),
-    h("button", { class: "ibtn", title: `Theme: ${THEME_NAMES[U.theme]}. Click to change.`, "aria-label": "Change theme", onclick: () => { setPref({ theme: THEMES[(THEMES.indexOf(U.theme) + 1) % THEMES.length] }); renderChrome(); toast("Theme: " + THEME_NAMES[U.theme]); } }, themeIcon),
+    h("button", { class: "ibtn", title: `Theme: ${THEME_NAMES[U.theme]}. Click to change.`, "aria-label": "Change theme", onclick: () => { setPref(themePatch(THEMES[(THEMES.indexOf(U.theme) + 1) % THEMES.length])); renderChrome(); if (isFeedTab()) renderMain(); toast("Theme: " + THEME_NAMES[U.theme]); } }, themeIcon),
     h("button", { class: "ibtn", title: "Keyboard shortcuts (?)", "aria-label": "Keyboard shortcuts", onclick: () => { S.help = true; renderOverlay(); } }, icon("help")),
     pillEl());
 }
@@ -1060,8 +1062,8 @@ function settingsMain() {
     conn("raindrop", [inp("API token", d.raindrop, "token", "password", "raindrop")], "Optional. Gives tag suggestions and one-way saving.")),
     h("p", { class: "note" }, "Keys, settings and look travel between your machines through Firefox Sync by themselves. See ", h("a", { href: "#", onclick: (e) => { e.preventDefault(); S.stab = "move"; renderMain(); } }, "Move setup"), " to check, send or fetch them, or to use a settings file instead."), chk("Save starred articles to Raindrop", d, "saveToRaindrop"), chk("Suggest tags from my Raindrop tags", d, "autoTag")];
   else if (tab === "look") content = [h("div", { class: "panel" }, h("h2", {}, "Look"),
-    h("div", { class: "grid2" }, h("div", { class: "field" }, "Theme", h("div", { class: "seg" }, THEMES.map(t => h("button", { "aria-pressed": String(U.theme === t), onclick: (e) => { setPref({ theme: t }); renderMain(); renderChrome(); } }, THEME_NAMES[t].split(" ")[0])))),
-      h("div", { class: "field" }, "Relevance colours", h("div", { class: "seg" }, ["ember", "saffron", "moss"].map(p => h("button", { "aria-pressed": String(U.palette === p), onclick: () => { setPref({ palette: p }); renderMain(); } }, p[0].toUpperCase() + p.slice(1))))),
+    h("div", { class: "grid2" }, h("div", { class: "field" }, "Theme", h("div", { class: "seg" }, THEMES.map(t => h("button", { "aria-pressed": String(U.theme === t), title: THEME_NAMES[t], onclick: (e) => { setPref(themePatch(t)); renderMain(); renderChrome(); } }, THEME_NAMES[t].split(" ")[0])))),
+      h("div", { class: "field" }, "Relevance colours", h("div", { class: "seg" }, PALETTE_NAMES.map(p => h("button", { "aria-pressed": String(U.palette === p), onclick: () => { setPref({ palette: p }); renderMain(); } }, p[0].toUpperCase() + p.slice(1))))),
       h("div", { class: "field" }, "Density", h("div", { class: "seg" }, [["compact", "Compact"], ["comfortable", "Comfortable"]].map(([id, l]) => h("button", { "aria-pressed": String((U.density === "compact") === (id === "compact")), onclick: () => { setPref({ density: id }); renderMain(); } }, l))))),
     chk("Show thumbnails (these load from the publisher's site)", U, "thumbs", (v) => { setPref({ thumbs: v }); }), chk("Mark articles read as they scroll past the top", U, "scrollRead", (v) => { setPref({ scrollRead: v }); })),
     h("div", { class: "panel" }, h("h2", {}, "Marking read"),
