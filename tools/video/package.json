@@ -1,0 +1,15 @@
+{
+  "name": "pravaha-video",
+  "private": true,
+  "description": "Remotion source of the 0.8.0 release video. Synthetic screenshots only.",
+  "scripts": {
+    "studio": "remotion studio src/index.jsx",
+    "render": "remotion render src/index.jsx Pravaha080 out/pravaha.mp4"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.543",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.543"
+  }
+}
