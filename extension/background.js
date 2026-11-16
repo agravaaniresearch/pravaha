@@ -74,7 +74,7 @@ async function runSync(opts) {
   // Every request has a deadline, so a sync cannot hang; the five-minute guard is a second line of defence.
   if (syncing && Date.now() - syncing < 5 * 60000) { if (!(opts && opts.quiet)) rerun = true; return; } // a sync you asked for during a running one runs right after it
   syncing = Date.now();
-  try { await engine.syncNow(opts); } finally { syncing = 0; if (rerun) { rerun = false; runSync(); } }
+  try { await engine.syncNow(opts); try { if (browser.storage.local.getBytesInUse) engine.bytesInUse = await browser.storage.local.getBytesInUse(null); } catch { /* not in every Firefox */ } } finally { syncing = 0; if (rerun) { rerun = false; runSync(); } }
 }
 
 // Firefox may not wake this page when Sync delivers data, so every poll also looks at Firefox Sync's storage (a local read, no network).

@@ -2,6 +2,7 @@
 // Nothing here touches browser globals directly; the background page injects everything.
 import { tokenize, stem, domainOf, firstParagraph, wordCount, canonicalUrl } from "./text.js";
 import { Corpus, cosine, mean, prune, topTerms } from "./vector.js";
+import { freshHealth, noteWrite, notePoll, healthSummary } from "./health.js";
 import { scoreItem, DEFAULT_WEIGHTS, normaliseWeights, whyRanked, feedStanding, standingOf, mixProfile, hotness, exposurePayload } from "./scoring.js";
 import { EventLog, Clock, derive, parseTs } from "./eventlog.js";
 import { Syncer, freshSyncState } from "./sync.js";
@@ -20,7 +21,7 @@ export const DEFAULT_SETTINGS = {
   device: "", miniflux: { url: "https://reader.miniflux.app", token: "" },
   webdav: { url: "https://myfiles.fastmail.com", user: "", pass: "", root: "pravaha" },
   raindrop: { token: "" }, weights: { ...DEFAULT_WEIGHTS }, pollMinutes: 2, novelty: true,
-  palette: "ember", theme: "light", sync: { keys: true, settings: true }, syncMeta: {}, ui: null, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: true, treeOrder: {}, treeOrderAt: 0, searchKeepDays: 400
+  palette: "ember", theme: "light", sync: { keys: true, settings: true }, syncMeta: {}, ui: null, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: false, treeOrder: {}, treeOrderAt: 0, searchKeepDays: 400
 };
 const DAY = 86400000;
 const randomId = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => "abcdefghjkmnpqrstuvwxyz23456789"[b % 31]).join("");
@@ -57,11 +58,13 @@ export class Engine {
 
   // ---------- persistence ----------
   async load() {
-    const s = await this.storage.get(["settings", "cache", "events", "eventsTail", "marks", "syncState", "pendingOps", "raindropCache", "echoLocal", "enrichment", "net", "others", "pendingHistory", "bodies", "icons", "searchIndex", "server"]);
+    const s = await this.storage.get(["health", "settings", "cache", "events", "eventsTail", "marks", "syncState", "pendingOps", "raindropCache", "echoLocal", "enrichment", "net", "others", "pendingHistory", "bodies", "icons", "searchIndex", "server"]);
     this.settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
     this.settings.miniflux = { ...DEFAULT_SETTINGS.miniflux, ...(this.settings.miniflux || {}) };
     this.settings.webdav = { ...DEFAULT_SETTINGS.webdav, ...(this.settings.webdav || {}) };
     this.settings.raindrop = { ...DEFAULT_SETTINGS.raindrop, ...(this.settings.raindrop || {}) };
+    // 0.8.1: Miniflux's own Raindrop integration now saves articles, so Pravaha's one-way save is switched off once, to avoid duplicates. It can be turned back on.
+    if (!this.settings.rdSave081) { this.settings.saveToRaindrop = false; this.settings.rdSave081 = true; }
     this.settings.weights = { ...DEFAULT_WEIGHTS, ...(this.settings.weights || {}) };
     if (!this.settings.treeOrder || typeof this.settings.treeOrder !== "object") this.settings.treeOrder = {};
     this.settings.sync = { ...DEFAULT_SETTINGS.sync, ...(this.settings.sync || {}) }; this.settings.syncMeta = { ...(this.settings.syncMeta || {}) };
@@ -71,6 +74,7 @@ export class Engine {
     if (!this.settings.device || (this.settings.device === "this-machine" && untouched)) { this.settings.device = "browser-" + randomId(5); fresh = true; }
     if (!this.settings.installId) { this.settings.installId = randomId(12); fresh = true; }
     this.cache = { items: {}, feeds: [], lastChangeTs: 0, lastDigestAt: 0, lastDigestTerms: [], ...(s.cache || {}) };
+    this.health = { ...freshHealth(), ...(s.health || {}) };
     this.marks = { feedsAt: 0, outboxAt: 0, outboxSig: "", ...(s.marks || {}) };
     if (this.marks.lastChangeTs > (this.cache.lastChangeTs || 0)) this.cache.lastChangeTs = this.marks.lastChangeTs;
     this.pendingOps = (s.pendingOps || []).map(o => ({ ...o, inflight: false })); this.raindropCache = s.raindropCache || null; this.echoLocal = s.echoLocal || null;
@@ -87,18 +91,20 @@ export class Engine {
     if (fresh) await this.persist(["settings"]);
   }
   _wire() {
+    if (!this._countedFetch) { this._reqs = 0; this._countedFetch = (...a) => { this._reqs++; return this.fetchImpl(...a); }; }
+    const fetchImpl = this._countedFetch;
     const w = this.settings.webdav;
-    this.dav = w.url && w.user && w.pass ? new WebDav({ baseUrl: w.url, user: w.user, pass: w.pass, fetchImpl: this.fetchImpl }) : null;
+    this.dav = w.url && w.user && w.pass ? new WebDav({ baseUrl: w.url, user: w.user, pass: w.pass, fetchImpl }) : null;
     this.syncer = this.dav ? new Syncer({ dav: this.dav, log: this.log, device: this.settings.device, installId: this.settings.installId, root: w.root || "pravaha", now: this.now, state: this.syncState, localExtra: () => ({ echo: this.echoLocal }) }) : null;
     if (this.syncer) this.syncer.onProgress = (p) => { if (p.device) this._act("history", `Reading history from ${p.device}`, p.done, p.total); else this._actEnd("history"); };
     const m = this.settings.miniflux;
-    this.mf = m.url && m.token ? new Miniflux({ baseUrl: m.url, token: m.token, fetchImpl: this.fetchImpl }) : null;
-    this.rd = this.settings.raindrop.token ? new Raindrop({ token: this.settings.raindrop.token, fetchImpl: this.fetchImpl }) : null;
+    this.mf = m.url && m.token ? new Miniflux({ baseUrl: m.url, token: m.token, fetchImpl }) : null;
+    this.rd = this.settings.raindrop.token ? new Raindrop({ token: this.settings.raindrop.token, fetchImpl }) : null;
   }
   _eventsSig() { return this.log.count() + "|" + (this.log.head() || ""); }
   // Writes the small keys now and schedules the heavy ones. With no list, everything is written (only first-time setup and imports do that).
   async persist(keys, { immediate = false } = {}) {
-    const all = { settings: this.settings, syncState: this.syncState, pendingOps: this.pendingOps, raindropCache: this.raindropCache, echoLocal: this.echoLocal, enrichment: this.enrichment, net: this.net, others: this.others, pendingHistory: this.pendingHistory, server: this.server, marks: this.marks };
+    const all = { health: this.health, settings: this.settings, syncState: this.syncState, pendingOps: this.pendingOps, raindropCache: this.raindropCache, echoLocal: this.echoLocal, enrichment: this.enrichment, net: this.net, others: this.others, pendingHistory: this.pendingHistory, server: this.server, marks: this.marks };
     const list = keys || [...Object.keys(all), ...HEAVY];
     const out = {}; let heavy = false;
     for (const k of list) {
@@ -106,7 +112,7 @@ export class Engine {
       if (k in all) out[k] = all[k];
     }
     if (this._deferred.has("events")) { const tail = this.log.own().filter(e => seqOf(e) > this._saved.ownSeq); if (tail.length || keys === undefined) out.eventsTail = tail; }
-    if (Object.keys(out).length) await this.storage.set(out);
+    if (Object.keys(out).length) { noteWrite(this.health, this.now(), JSON.stringify(out).length, false); await this.storage.set(out); }
     if (heavy) { if (immediate || !keys) await this.flushPersist(); else this._scheduleFlush(); }
   }
   _scheduleFlush() {
@@ -118,10 +124,14 @@ export class Engine {
   async flushPersist() {
     if (this._deferTimer) { clearTimeout(this._deferTimer); this._deferTimer = null; }
     const want = [...this._deferred]; this._deferred.clear(); const out = {};
-    if (want.includes("cache")) { const h = hashStr(cacheJson(this.cache)); if (h !== this._saved.cache) { out.cache = this.cache; this._saved.cache = h; } }
+    let bytes = 0;
+    if (want.includes("cache")) { const h = hashStr(cacheJson(this.cache)); if (h !== this._saved.cache) { out.cache = this.cache; this._saved.cache = h; bytes += Number(h.split(":")[1]) || 0; } }
     if (want.includes("events")) { const sig = this._eventsSig(); if (sig !== this._saved.events) { out.events = this.log.list(); out.eventsTail = []; this._saved.events = sig; this._saved.ownSeq = this.log.seq; } }
     if (want.includes("searchIndex") && this._idxDirty) { out.searchIndex = this.searchIndex; this._idxDirty = false; }
-    if (Object.keys(out).length) await this.storage.set(out);
+    if (Object.keys(out).length) {
+      for (const k of Object.keys(out)) if (k !== "cache") bytes += JSON.stringify(out[k]).length;
+      noteWrite(this.health, this.now(), bytes, true); this._pollHeavy = true; await this.storage.set(out);
+    }
     return Object.keys(out);
   }
   async saveSettings(patch) {
@@ -146,13 +156,37 @@ export class Engine {
 
   // ---------- model ----------
   _derive() {
-    if (!this._derived) { const ev = this.log.list(), now = this.now(); this._derived = derive(ev, now); this._derived.standing = feedStanding(ev, now); }
+    if (!this._derived) {
+      const own = this.log.list(), extra = this._raindropSaves(own), now = this.now();
+      const ev = extra.length ? [...own, ...extra].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)) : own;
+      this._derived = derive(ev, now); this._derived.standing = feedStanding(ev, now);
+    }
     return this._derived;
+  }
+  // Articles Miniflux saved to your "MiniFlux Saves" Raindrop collection count as saves for ranking: they pull the interest profile and
+  // raise the feed's standing. They are worked out, never logged, so nothing new travels between machines, and an article you also
+  // saved in Pravaha counts once.
+  _raindropSaves(own) {
+    const rc = this.raindropCache; this._rdMatch = { matched: 0, count: 0 };
+    if (!rc || !rc.mfColl) return [];
+    const inColl = (rc.bookmarks || []).filter(b => b.coll === rc.mfColl.id); this._rdMatch.count = inColl.length;
+    if (!inColl.length) return [];
+    const byUrl = new Map(); for (const it of Object.values(this.cache.items)) { const c = canonicalUrl(it.url); if (c) byUrl.set(c, it); }
+    const saved = new Set(own.filter(e => e.type === "save" || e.type === "unsave").map(e => String(e.entry)));
+    const out = [];
+    for (const b of inColl) {
+      const it = byUrl.get(canonicalUrl(b.link)); if (!it) continue; this._rdMatch.matched++;
+      if (saved.has(String(it.id))) continue;
+      const at = Math.min(b.at || this.now(), this.now());
+      out.push({ v: 1, eid: `raindrop:${it.id}`, device: "raindrop", ts: `${String(at).padStart(14, "0")}.00000.raindrop`, type: "save", entry: it.id, feed: it.feedId, payload: { terms: [...new Set(tokenize(`${it.title} ${it.summary}`))].slice(0, 12) } });
+    }
+    return out;
   }
   // The expensive part (vocabulary, one vector per Raindrop save, tag profiles) is built once per Raindrop copy.
   // The interest profile and the echo are cheap and are rebuilt whenever the history changes.
   _buildBase() {
     if (this._base) return this._base;
+    if (this.health) this.health.rebuilds = (this.health.rebuilds || 0) + 1;
     const bms = (this.raindropCache && this.raindropCache.bookmarks) || [];
     const corpus = new Corpus();
     const text = (b) => `${(b.tags || []).join(" ")} ${(b.tags || []).join(" ")} ${b.note || ""} ${b.title || ""} ${b.excerpt || ""}`;
@@ -402,7 +436,7 @@ export class Engine {
       const known = new Set(this.cache.feeds.map(f => f.id)); if (Object.values(this.cache.items).some(it => it.status === "unread" && !known.has(it.feedId))) { this._applyFeeds(await this.mf.feeds(), col); this.marks.feedsAt = this.now(); }
       this._retain(); this._reindex();
       if (this.pendingOps.length) await this.flushOps();
-      this._netOk("miniflux"); this._hot = null; if (this._base && this._base.fromItems) this._invalidate();
+      this._netOk("miniflux"); this._hot = null; if (this.raindropCache && this.raindropCache.mfColl) { this._derived = null; this._model = null; } // new articles may match Raindrop saves if (this._base && this._base.fromItems) this._invalidate();
       this.net.miniflux = { ...this.net.miniflux, mode, calls: this.mf.stats.calls, bytes: this.mf.stats.bytes };
     } catch (e) { this._netErr("miniflux", e); }
     col.done(this.server, this.now()); this._actEnd("pull");
@@ -430,10 +464,11 @@ export class Engine {
   // ---------- Raindrop and echo ----------
   async refreshRaindrop(force = false) {
     if (!this.rd) return;
-    if (!force && this.raindropCache && this.raindropCache.v === 2 && this.now() - this.raindropCache.at < DAY) return;
+    if (!force && this.raindropCache && this.raindropCache.v === 3 && this.now() - this.raindropCache.at < DAY) return;
     try {
       const bms = await this.rd.bookmarks();
-      this.raindropCache = { at: this.now(), v: 2, bookmarks: bms.map(({ title, excerpt, note, tags, domain, at, link }) => ({ title, excerpt, note, tags, domain, at, link })) };
+      let mfColl = null; try { const c = (await this.rd.collections()).find(x => /^\s*miniflux\s*saves\s*$/i.test(x.title)); if (c) mfColl = { id: c.id, title: c.title }; } catch { /* the collection list is optional */ }
+      this.raindropCache = { at: this.now(), v: 3, mfColl, bookmarks: bms.map(({ title, excerpt, note, tags, domain, at, link, coll }) => ({ title, excerpt, note, tags, domain, at, link, coll })) };
       this._netOk("raindrop"); this._invalidate();
     } catch (e) { this._netErr("raindrop", e); }
     await this.persist(["raindropCache", "net"]);
@@ -456,6 +491,7 @@ export class Engine {
   // ---------- sync ----------
   async syncNow({ quiet = false } = {}) {
     const before = quiet ? this.signature() : null;
+    const t0 = this.now(), w0 = this.health.writes.length ? this.health.writes[this.health.writes.length - 1][0] : 0, r0 = this._reqs || 0; this._pollHeavy = false; const p0 = performance.now();
     if (quiet) { this._muted = true; this._mutedAt = this.now(); this._heldChange = false; }
     try {
       await this.refresh({ feeds: !quiet });
@@ -484,7 +520,9 @@ export class Engine {
       }
       // The heavy keys first, then the sync record that says which remote history was applied, so a crash in between can only cause a re-read, never a loss.
       this._deferred.add("cache"); this._deferred.add("events"); this._deferred.add("searchIndex"); await this.flushPersist();
-      await this.persist(["syncState", "others", "pendingHistory", "net", "enrichment", "marks", "pendingOps", "server"]);
+      const bytes = this.health.writes.filter(x => x[0] >= t0 && x[0] >= w0).reduce((a, x) => a + x[1], 0);
+      notePoll(this.health, { at: t0, ms: Math.round(performance.now() - p0), reqs: (this._reqs || 0) - r0, bytes, heavy: this._pollHeavy, changed: !quiet || before !== this.signature() });
+      await this.persist(["syncState", "others", "pendingHistory", "net", "enrichment", "marks", "pendingOps", "server", "health"]);
     } finally {
       const announce = !quiet || !this._muted || this.signature() !== before; this._muted = false; this._heldChange = false;
       if (announce) this.onChange();
@@ -512,7 +550,8 @@ export class Engine {
       now: this.now(), device: this.settings.device, myHead: this.log.headOf(this.settings.device), remoteHeads: this.syncState.remoteHeads, others: this.others,
       miniflux: { configured: !!this.mf, error: this.net.miniflux && this.net.miniflux.error, lastOkAt: this.net.miniflux && this.net.miniflux.lastOkAt },
       webdav: { configured: !!this.dav, error: this.net.webdav && this.net.webdav.error, lastOkAt: this.net.webdav && this.net.webdav.lastOkAt },
-      raindrop: { configured: !!this.rd, error: this.net.raindrop && this.net.raindrop.error, lastOkAt: this.net.raindrop && this.net.raindrop.lastOkAt },
+      raindrop: { configured: !!this.rd, error: this.net.raindrop && this.net.raindrop.error, lastOkAt: this.net.raindrop && this.net.raindrop.lastOkAt, mfColl: this.raindropCache && this.raindropCache.mfColl ? { title: this.raindropCache.mfColl.title, ...(this._derive(), this._rdMatch) } : null },
+      health: healthSummary(this.health, this.now(), { events: this.log.count(), bytesInUse: this.bytesInUse || null }),
       serverLamp: serverLamp(this.server, !!this.mf, this.now()), eventCounts: this.log.countsByDevice(), pendingOps: this.pendingOps.reduce((n, o) => n + (o.ids ? o.ids.length : 1), 0), pendingEvents: this.syncer ? this.syncer.pending().length : this.log.own().length, corruptLines: this.syncState.corruptLines,
       feeds: { total: feeds.length, dead: feeds.filter(f => f.health.dead).length, trouble: feeds.filter(f => f.health.state === "amber").length }
     }) };

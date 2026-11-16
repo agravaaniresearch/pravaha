@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1
+
+- **Training rules are tidy.** On the Stats page the rules now sit in one collapsed line that gives the count ("24 rules: 18 more, 6 less"). Opened, they are grouped into More and Less as small chips, each with an × to remove it, and a filter box appears once there are more than twelve.
+- **Miniflux's Raindrop saves count for ranking.** Pravaha finds the Raindrop collection named "MiniFlux Saves" (matched by title, nested or not). An article in it that Pravaha also holds counts as a save: it pulls the interest profile and raises its feed's standing. Nothing is written to the history for it, so nothing new travels between machines, and an article you also saved in Pravaha counts once. The Raindrop tile on the Sync page names the collection and how many of its saves matched.
+- **Pravaha's own save to Raindrop is off.** Miniflux now does that job, so the update switches Pravaha's one-way save off once, to avoid duplicates. It can be turned back on in Settings.
+- **Extension health.** The Sync page has an Extension health tile, and the status pill in the top bar carries a small dot of the same colour. It shows what Pravaha itself costs: bytes written to Firefox's storage in the last hour, how many large writes there were, the last poll's time, requests and bytes, model rebuilds, the size of the history, and the total stored. It turns amber past 1 MB written in an hour, or if a poll that found nothing new rewrote the article copy or history; it turns red past 10 MB in an hour. A line shows the bytes written by each of the last 30 polls.
+- Checked: 263 tests pass, lint is clean, the failure trials are unchanged, and the new rules panel, health tile and dot render in real Firefox 160 without console errors. The "MiniFlux Saves" signal is tested against fakes only.
+
 ## 0.8.0
 
 A senior review of the whole code base, a mathematical review of the relevance engine, and a pass for lightness and design. No event type was added and no stored key was renamed, so 0.7.0 and 0.8.0 machines read each other's history; update both machines anyway, because only 0.8.0 understands the daily article counts that the new feed standing uses.

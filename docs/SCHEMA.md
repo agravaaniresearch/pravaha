@@ -240,3 +240,12 @@ Interest profile: `(1 - L) * bookmark mean + L * weighted mean of pulls`, pull w
 - `enrich/results.json` is read and `enrich/outbox.json` written at most hourly, and the outbox only when its list of articles changed.
 - A machine whose `state/<device>.json` says its `pushedSeq` is at or below what this machine already holds, with every earlier segment read whole, is not listed or downloaded.
 - With no reader tab open, the background skips a poll if the last successful fetch is under 10 minutes old and nothing is waiting to be sent.
+
+## 0.8.1
+
+| Key or field | Meaning |
+|---|---|
+| `health` (local, small, written with each poll) | `{ writes: [[at, bytes, heavy]], polls: [{ at, ms, reqs, bytes, heavy, changed }], rebuilds }`. Writes are kept for one hour (at most 400), polls for the last 60. Thresholds: amber above 1 MB written in an hour or a quiet poll that found nothing new but wrote a heavy key; red above 10 MB in an hour. |
+| `raindropCache.v` | 3. Each bookmark carries `coll` (its Raindrop collection id); `mfColl` is `{ id, title }` of the collection titled "MiniFlux Saves" (case and spaces ignored), or null. |
+| Raindrop saves as signal | Worked out, never logged: for each bookmark in `mfColl` whose canonical link matches a cached article without a Pravaha `save`/`unsave` event, `_derive` adds an in-memory `save` event (`device: "raindrop"`, time = the bookmark's last update, terms = the article's first 12 stems). Standing and the profile treat it as a save. |
+| `settings.saveToRaindrop` | Default false from 0.8.1; `settings.rdSave081` records that the one-time switch-off ran. |

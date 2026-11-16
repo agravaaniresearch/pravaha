@@ -96,13 +96,15 @@ export function makeMiniflux({ faults = () => null } = {}) {
 }
 
 export function makeRaindrop({ bookmarks = [], faults = () => null } = {}) {
-  const st = { bookmarks, saved: [] };
+  const st = { bookmarks, saved: [], collections: [], children: [] };
   const handler = async (url, opts = {}) => {
     const f = faults(opts.method, url); if (f === "throw") throw new TypeError("network down"); if (typeof f === "number") return new Response("", { status: f });
     const u = new URL(url); const json = (o) => new Response(JSON.stringify(o), { status: 200 });
     if (opts.headers.Authorization !== "Bearer rd-token") return new Response("", { status: 401 });
     if (u.pathname.endsWith("/tags/0")) { const c = {}; for (const b of st.bookmarks) for (const t of b.tags) c[t] = (c[t] || 0) + 1; return json({ items: Object.entries(c).map(([_id, count]) => ({ _id, count })) }); }
     if (u.pathname.endsWith("/raindrops/0")) { const page = Number(u.searchParams.get("page") || 0); return json({ items: st.bookmarks.slice(page * 50, page * 50 + 50) }); }
+    if (u.pathname.endsWith("/collections")) return json({ items: st.collections });
+    if (u.pathname.endsWith("/collections/childrens")) return json({ items: st.children });
     if (u.pathname.endsWith("/raindrop") && opts.method === "POST") { st.saved.push(JSON.parse(opts.body)); return json({ item: {} }); }
     return new Response("", { status: 404 });
   };

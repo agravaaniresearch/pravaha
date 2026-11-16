@@ -170,7 +170,8 @@ function pillEl() {
   if (a || S.busy) { state = "syncing"; text = a ? a.label : "Syncing with Miniflux"; sub = a && a.total ? `${Math.min(a.done, a.total)} of ${a.total}` : ""; lamp = h("span", { class: "spin" }); }
   else if (pend > 0 && !mfRed()) { state = "syncing"; text = "Sending to Miniflux"; sub = `${pend} waiting`; lamp = h("span", { class: "spin" }); }
   else if (S.syncFlash > Date.now()) { state = "synced"; text = "Synced with Miniflux"; lamp = icon("check", 14); }
-  return h("button", { class: "pill", "data-state": state, title: st ? "Open the Sync page" : "", onclick: () => go("sync") }, lamp, h("span", { class: "ptext" }, text), sub ? h("span", { class: "sub2" }, sub) : null);
+  const hl = st && st.health; const hdot = hl ? h("i", { class: "hdot", "data-h": hl.state, title: `Extension health: ${hl.sentence}` }) : null;
+  return h("button", { class: "pill", "data-state": state, title: st ? "Open the Sync page" : "", onclick: () => go("sync") }, lamp, h("span", { class: "ptext" }, text), sub ? h("span", { class: "sub2" }, sub) : null, hdot);
 }
 function progressEl() {
   const a = S.status && S.status.activity; const on = !!(a || S.busy); const det = !!(a && a.total > 0);
@@ -898,12 +899,38 @@ function afterMain() {
 
 // ---------- stats ----------
 const hbar = (name, value, max, color, label) => h("div", { class: "hbar" }, h("span", { class: "name", title: name }, name), h("span", { class: "track" }, h("i", { style: { width: (max ? value / max * 100 : 0) + "%", background: color } })), h("span", { class: "val" }, label != null ? label : String(value)));
+// Training rules: one summary line, opened on demand, grouped into More and Less as compact chips, with a filter once the list is long.
+function rulesPanel() {
+  if (!S.rules.length) return [h("p", { class: "note" }, "No training yet. Use the thumbs on an article, or click the tags and words under its title.")];
+  const q = (S.ruleQ || "").toLowerCase(); const shown = S.rules.filter(r => !q || `${r.type} ${r.key}`.toLowerCase().includes(q));
+  const more = shown.filter(r => r.value > 0), less = shown.filter(r => r.value < 0), all = S.rules.filter(r => r.value > 0).length;
+  const chip = (r) => h("span", { class: "rchip", "data-v": String(Math.sign(r.value)), title: `${r.type}: ${r.key}` }, h("small", {}, r.type), r.key,
+    h("button", { "aria-label": `Remove the rule for ${r.type} ${r.key}`, onclick: async () => { await train(r.type, r.key, 0); go("stats"); } }, "×"));
+  const group = (name, list) => list.length ? h("div", { class: "rgroup" }, h("b", {}, `${name} (${list.length})`), h("div", { class: "rchips" }, list.map(chip))) : null;
+  const filter = S.rules.length > 12 ? h("input", { class: "rfilter", type: "search", placeholder: "Filter rules", value: S.ruleQ || "", oninput: (e) => { S.ruleQ = e.target.value; const sel = e.target.selectionStart; renderMain(); const f = document.querySelector(".rfilter"); if (f) { f.focus(); f.setSelectionRange(sel, sel); } } }) : null;
+  return [h("details", { class: "rules", open: S.rulesOpen || !!q || undefined, ontoggle: (e) => { S.rulesOpen = e.target.open; } },
+    h("summary", {}, `${S.rules.length} rule${S.rules.length === 1 ? "" : "s"}: ${all} more, ${S.rules.length - all} less`), filter, group("More", more), group("Less", less),
+    !more.length && !less.length ? h("p", { class: "note" }, "No rule matches the filter.") : null)];
+}
+// A tiny line of bytes written per poll, for the Health tile.
+function spark(vals) {
+  const w = 160, hgt = 28, mx = Math.max(1, ...vals); const pts = vals.map((v, i) => `${(i / Math.max(1, vals.length - 1) * w).toFixed(1)},${(hgt - 2 - v / mx * (hgt - 4)).toFixed(1)}`).join(" ");
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("viewBox", `0 0 ${w} ${hgt}`); svg.setAttribute("class", "spark"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Bytes written per poll, last 30 polls");
+  const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline"); pl.setAttribute("points", pts || `0,${hgt - 2} ${w},${hgt - 2}`); svg.append(pl); return svg;
+}
+function healthTile() {
+  const hl = S.status && S.status.health; if (!hl) return null;
+  const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
+  const facts = h("div", { class: "hfacts" }, h("span", {}, `${kb(hl.perHour)} written in the last hour`), h("span", {}, `${hl.heavyHour} large write${hl.heavyHour === 1 ? "" : "s"}`),
+    hl.last ? h("span", {}, `Last poll ${hl.last.ms} ms, ${hl.last.reqs} requests, ${kb(hl.last.bytes)}`) : null, h("span", {}, `${hl.rebuilds} model rebuilds`), h("span", {}, `${hl.events.toLocaleString()} history events`), hl.bytesInUse ? h("span", {}, `${kb(hl.bytesInUse)} stored in all`) : null);
+  return tile(hl.state, "gauge", "Extension health", null, hl.sentence, null, h("div", {}, spark(hl.spark || []), facts));
+}
 function statsMain() {
   const s = S.stats; if (!s) return [h("div", { class: "empty" }, "Loading")];
   const tiles = [["Read in the reader", s.cards], ["Opened in tabs", s.opens], ["Saved", s.saves], ["Dismissed", s.dismisses], ["Minutes reading", s.dwellMinutes]].map(([n, v]) => h("div", { class: "stat" }, h("b", {}, String(v)), h("span", {}, n + ", last 30 days")));
   const maxB = Math.max(1, ...s.bands.map(b => b.n)); const maxO = Math.max(1, ...s.bands.map(b => b.opened));
   const col = (b) => gradeOf((b.lo + b.hi) / 2).bg;
-  const rules = S.rules.length ? S.rules.map(r => h("div", { class: "trainrow" }, h("span", { class: "kw", "data-v": String(Math.sign(r.value)) }, `${r.type}: ${r.key}`), h("span", {}, r.value > 0 ? "more" : "less"), h("button", { class: "kw", onclick: async () => { await train(r.type, r.key, 0); go("stats"); } }, "Remove"))) : [h("p", { class: "note" }, "No training yet. Use the thumbs on an article, or click the tags and words under its title.")];
+  const rules = rulesPanel();
   const folders = s.savesByFolder.length ? s.savesByFolder.map(([n, v]) => hbar(n, v, Math.max(1, ...s.savesByFolder.map(x => x[1])), "var(--accent)")) : [h("p", { class: "note" }, "Nothing saved in the last 30 days.")];
   return [h("div", { class: "page" }, h("h1", {}, "Reading stats"), h("div", { class: "tiles" }, tiles),
     h("div", { class: "cols" },
@@ -984,7 +1011,7 @@ function syncMain() {
     body = [h("div", { class: "hero dash", "data-state": st.overall }, ring(frac, st.overall, st.overall === "green" ? icon("check", 40) : h("span", { class: "rnum" }, String(n)), false, headline),
       h("div", { class: "herotext" }, h("p", { class: "eyebrow" }, "Sync status"), h("h2", {}, headline), h("p", {}, sub), st.activity ? h("p", { class: "note" }, `${st.activity.label}${st.activity.total ? `: ${Math.min(st.activity.done, st.activity.total)} of ${st.activity.total}` : ""}`) : null,
         h("div", { class: "heroact" }, h("button", { class: "btn primary", onclick: syncNow }, icon("sync", 15), S.busy ? "Syncing" : "Sync now"), h("button", { class: "btn", onclick: async () => { const r = await send({ type: "digest" }); toast(r.sentence); } }, "Write digest now")))),
-      h("div", { class: "tiles" }, svc("miniflux", "rss", "Miniflux"), serverTile(), svc("webdav", "layers", "WebDAV storage"), svc("log", "clock", "Reading history"), svc("raindrop", "bookmark", "Raindrop"), svc("feeds", "list", "Feeds"),
+      h("div", { class: "tiles" }, svc("miniflux", "rss", "Miniflux"), serverTile(), svc("webdav", "layers", "WebDAV storage"), svc("log", "clock", "Reading history"), svc("raindrop", "bookmark", "Raindrop"), svc("feeds", "list", "Feeds"), healthTile(),
         tile(fxState, "sync", "Firefox Sync", null, !fx ? "Reading Firefox Sync." : fx.error ? fx.error : fx.parts.map(p => fxLine(p)[1]).slice(0, 1).join(""), null, h("div", { class: "fxbar", role: "img", "aria-label": "The four parts Firefox Sync carries" }, (fx ? fx.parts : [{}, {}, {}, {}]).map(p => h("i", { "data-s": p.part ? fxLine(p)[0] : "off", title: p.part ? FX_NAMES[p.part] : "" }))))),
       h("div", { class: "graphs" }, h("div", { class: "gcard" }, h("div", { class: "gtitle2" }, h("b", {}, "Changes waiting"), h("span", {}, n ? `${n} now` : "none now")), areaGraph(hist.map(p => p.pending), "Changes waiting to sync over time", "changes")),
         h("div", { class: "gcard" }, h("div", { class: "gtitle2" }, h("b", {}, "History on the storage"), h("span", {}, `${total.toLocaleString()} events`)),
@@ -1062,7 +1089,7 @@ function settingsMain() {
     conn("miniflux", [inp("Server address", d.miniflux, "url", "text", "miniflux"), inp("API key", d.miniflux, "token", "password", "miniflux")], "Miniflux, Settings, API Keys. Tested as soon as both boxes are filled."),
     conn("webdav", [inp("Server address", d.webdav, "url", "text", "webdav"), inp("User name", d.webdav, "user", "text", "webdav"), inp("App password", d.webdav, "pass", "password", "webdav"), inp("Folder", d.webdav, "root", "text", "webdav")], "Fastmail app password with Files access. The test writes a small file."),
     conn("raindrop", [inp("API token", d.raindrop, "token", "password", "raindrop")], "Optional. Gives tag suggestions and one-way saving.")),
-    h("p", { class: "note" }, "Keys, settings and look travel between your machines through Firefox Sync by themselves. See ", h("a", { href: "#", onclick: (e) => { e.preventDefault(); S.stab = "move"; renderMain(); } }, "Move setup"), " to check, send or fetch them, or to use a settings file instead."), chk("Save starred articles to Raindrop", d, "saveToRaindrop"), chk("Suggest tags from my Raindrop tags", d, "autoTag")];
+    h("p", { class: "note" }, "Keys, settings and look travel between your machines through Firefox Sync by themselves. See ", h("a", { href: "#", onclick: (e) => { e.preventDefault(); S.stab = "move"; renderMain(); } }, "Move setup"), " to check, send or fetch them, or to use a settings file instead."), chk("Pravaha also saves starred articles to Raindrop (off from 0.8.1: Miniflux's own Raindrop integration does this into \"MiniFlux Saves\", which Pravaha reads as saves for ranking)", d, "saveToRaindrop"), chk("Suggest tags from my Raindrop tags", d, "autoTag")];
   else if (tab === "look") content = [h("div", { class: "panel" }, h("h2", {}, "Look"),
     h("div", { class: "grid2" }, h("div", { class: "field" }, "Theme", h("div", { class: "seg" }, THEMES.map(t => h("button", { "aria-pressed": String(U.theme === t), title: THEME_NAMES[t], onclick: (e) => { setPref(themePatch(t)); renderMain(); renderChrome(); } }, THEME_NAMES[t].split(" ")[0])))),
       h("div", { class: "field" }, "Relevance colours", h("div", { class: "seg" }, PALETTE_NAMES.map(p => h("button", { "aria-pressed": String(U.palette === p), onclick: () => { setPref({ palette: p }); renderMain(); } }, p[0].toUpperCase() + p.slice(1))))),

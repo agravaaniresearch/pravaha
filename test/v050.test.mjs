@@ -81,7 +81,7 @@ test("the page script notices a feed link added after the page loaded, once", as
 });
 test("the manifest asks for no all-sites permission up front, and the right-click item is named Subscribe with Pravaha", () => {
   const m = JSON.parse(fs.readFileSync(new URL("../extension/manifest.json", import.meta.url), "utf8")); const bg = fs.readFileSync(new URL("../extension/background.js", import.meta.url), "utf8");
-  assert.equal(m.version, "0.8.0"); assert.equal(JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version, m.version);
+  assert.equal(m.version, "0.8.1"); assert.equal(JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version, m.version);
   assert.ok(m.permissions.includes("scripting")); assert.ok(m.host_permissions.every(h => !/\*:\/\/\*|https:\/\/\*\/|http:\/\/\*\//.test(h)), "no all-sites host permission at install");
   assert.deepEqual(m.optional_host_permissions, ["https://*/*", "http://*/*"]); assert.equal(m.content_scripts, undefined, "no content script is declared up front");
   assert.match(bg, /title: "Subscribe with Pravaha"/); assert.doesNotMatch(bg, /Find feeds here/);

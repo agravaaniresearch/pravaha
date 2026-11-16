@@ -25,9 +25,9 @@ test("one page has one address: scheme, www, fragment, tracking parameters and a
 
 test("the Raindrop copy keeps each link, and a copy made before links were kept is fetched again at once", async () => {
   const { w, e } = await ready([SAVED]);
-  assert.equal(e.raindropCache.v, 2); assert.ok(e.raindropCache.bookmarks.every(b => typeof b.link === "string" && b.link.startsWith("http")), "every saved page carries its link");
+  assert.equal(e.raindropCache.v, 3); assert.ok(e.raindropCache.bookmarks.every(b => typeof b.link === "string" && b.link.startsWith("http")), "every saved page carries its link");
   const before = w.rd.st.bookmarks.length; e.raindropCache = { at: Date.now(), bookmarks: e.raindropCache.bookmarks.map(({ link, ...rest }) => rest) };
-  await e.refreshRaindrop(); assert.equal(e.raindropCache.v, 2, "an old shape is replaced even though it is fresh"); assert.equal(e.raindropCache.bookmarks.length, before); assert.ok(e.raindropCache.bookmarks[0].link);
+  await e.refreshRaindrop(); assert.equal(e.raindropCache.v, 3, "an old shape is replaced even though it is fresh"); assert.equal(e.raindropCache.bookmarks.length, before); assert.ok(e.raindropCache.bookmarks[0].link);
 });
 
 test("the trainer for an article lists your own Raindrop tags first, then suggested ones, with the words that carry the title", async () => {

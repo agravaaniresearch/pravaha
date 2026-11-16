@@ -9,6 +9,8 @@ Miniflux keeps the feeds, read state, stars and folders. Pravaha adds a relevanc
 - **Reads from Miniflux.** Folders are Miniflux categories. A slash makes a nested folder, so `Defence/Shipbuilding` appears as Shipbuilding inside Defence.
 - **Ranks with five signals (0.8.0).** 0.40 tag match (your best-matching Raindrop tag), 0.20 sites you read, 0.20 feed standing (the share of a feed's articles you engage with, not the count), 0.10 freshness and 0.10 for a story covered by several of your feeds. Training rules add or subtract up to 0.2. Feeds you have not opened this session get a small novelty boost. All weights are editable in Settings.
 - **Runs light (0.8.0).** An idle poll writes about 1 KB to Firefox's storage instead of several megabytes, makes 3 to 5 requests, and runs at most every 10 minutes while no Pravaha tab is open. Every request gives up after a deadline, so a hung server cannot freeze syncing.
+- **Shows its own health (0.8.1).** The Sync page reports what Pravaha costs your Firefox (storage written per hour and per poll, requests, model rebuilds) and a dot in the top bar turns amber or red if it starts writing too much.
+- **Learns from Miniflux's Raindrop saves (0.8.1).** Articles in the Raindrop collection "MiniFlux Saves" count as saves for ranking, once each.
 - **Reads in a pane on wide screens (0.8.0).** At 1800 pixels and wider the open article sits beside the list instead of inside it.
 - **Reads in place.** Opening an article shows it as a card inside the list, in Newsreader or Literata. Press `w` (the coffee cup) to ask Miniflux for the complete article. Press `b` to open it in a background tab. Both are logged, and a background open counts more than a card read.
 - **Stays organised.** Feeds are collapsible sections with their Miniflux icon and an unread count. Marking a section read folds it away. Articles can be marked read as they scroll past the top. The tabs are Newsfeed, Saved, Stats, Sync and Settings.
@@ -341,7 +343,7 @@ No telemetry. Data goes only to servers you configure. Credentials are stored un
 
 ```
 npm install
-npm test            # 256 tests: engine, scoring, event log, sync, services, search, bulk marking, reader screen under jsdom
+npm test            # 263 tests: engine, scoring, event log, sync, services, search, bulk marking, reader screen under jsdom
 npm run lint        # Mozilla's web-ext lint
 node tools/failure-rates.mjs 150 --write
 node tools/example-run.mjs
@@ -358,7 +360,7 @@ See [DEPLOY.md](DEPLOY.md). The short version: download `pravaha.xpi` from the l
 
 ```
 npm install
-npm test                       # 256 tests
+npm test                       # 263 tests
 node tools/failure-rates.mjs   # random failure injection, see docs/FAILURE_RATES.md
 npm run lint                   # Mozilla's web-ext lint
 ```

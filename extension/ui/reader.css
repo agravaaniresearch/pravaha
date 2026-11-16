@@ -541,3 +541,18 @@ html { scroll-padding-bottom: 90px; }
 @keyframes pv-pane-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
 .chip.hot { color: var(--on-accent); background: color-mix(in srgb, var(--accent) 85%, transparent); border-color: transparent; font-weight: 600; }
 :root[data-theme="khadi"] .chip.hot, :root[data-theme="light"] .chip.hot { background: var(--accent-ink); }
+
+/* 0.8.1: training rules as compact chips, extension health */
+details.rules > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.rfilter { margin: 8px 0; width: 100%; max-width: 280px; }
+.rgroup { margin-top: 10px; } .rgroup > b { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.rchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.rchip { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; padding: 2px 4px 2px 9px; border-radius: 999px; background: var(--ok-bg); color: var(--ok); }
+.rchip[data-v="-1"] { background: var(--bad-bg); color: var(--bad); }
+.rchip small { opacity: .7; font-size: 10.5px; }
+.rchip button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; border-radius: 50%; }
+.rchip button:hover { background: color-mix(in srgb, currentColor 18%, transparent); }
+.spark { width: 160px; height: 28px; display: block; margin: 6px 0; } .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.hfacts { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.hdot { width: 7px; height: 7px; border-radius: 50%; margin-left: 6px; background: var(--ok); flex: none; }
+.hdot[data-h="amber"] { background: var(--amber); } .hdot[data-h="red"] { background: var(--bad); }

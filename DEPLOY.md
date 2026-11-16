@@ -118,6 +118,10 @@ No event type was added and no stored key was renamed. Install the new file on e
 
 `node tools/bench-lightness.mjs` prints what an idle poll and a card open cost on a synthetic library.
 
+## 6f. Updating to 0.8.1
+
+Install the new file on each machine; no permission is asked. On first start Pravaha switches its own Raindrop save off once (Miniflux's integration saves into "MiniFlux Saves" instead); turn it back on under Settings if you want both. The Raindrop copy is read again at once, to learn which collection each save is in. The Extension health tile is on the Sync page.
+
 ## 7. Testing in real Firefox
 
 `tools/firefox-e2e/` drives two or three real Firefox profiles with Selenium against a fake Miniflux and WebDAV. Needs Firefox (160 tested; Zen is built on it) and geckodriver under `/home/claude/ffx` (or set `FFX`), `pip install selenium`, and `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` (set by the script) so Marionette may open extension pages. Run `node tools/firefox-e2e/serve.mjs 8799 &` then `python3 tools/firefox-e2e/e2e.py`. `tools/firefox-e2e/probe_flash.py` runs two active machines for a few minutes and counts toasts and redraws while idle. Firefox Sync's cloud is not reachable there, so delivery is simulated by copying the `storage.sync` items between profiles.

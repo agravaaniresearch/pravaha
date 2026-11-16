@@ -31,7 +31,7 @@ export function computeStatus(i) {
   // Raindrop
   if (!i.raindrop.configured) lights.push({ id: "raindrop", label: "Raindrop", state: "off", sentence: "Not set up yet. Tag matching will use only your bookmarks and history." });
   else if (i.raindrop.error) lights.push({ id: "raindrop", label: "Raindrop", state: "amber", sentence: `${i.raindrop.error.plain} Tags were last read ${since(i.raindrop.lastOkAt)}.` });
-  else lights.push({ id: "raindrop", label: "Raindrop", state: "green", sentence: `Tags read ${since(i.raindrop.lastOkAt)}.` });
+  else lights.push({ id: "raindrop", label: "Raindrop", state: "green", sentence: `Tags read ${since(i.raindrop.lastOkAt)}.${i.raindrop.mfColl ? ` Found "${i.raindrop.mfColl.title}": ${i.raindrop.mfColl.matched} of its ${i.raindrop.mfColl.count} saves are articles here and count as saves for ranking.` : " No \"MiniFlux Saves\" collection found."}` });
 
   // Event log on this machine
   if (!i.webdav.configured) lights.push({ id: "log", label: "Reading history", state: "off", sentence: `${i.pendingEvents} event${i.pendingEvents === 1 ? "" : "s"} kept on this machine.` });
@@ -78,6 +78,7 @@ export function computeStatus(i) {
   const overall = !i.miniflux.configured ? "off" : worst(syncLights.map(l => l.state));
   const scope = !i.miniflux.configured ? "none" : i.webdav.configured ? "full" : "miniflux";
   return {
+    health: i.health || null,
     overall, scope, lights, devices,
     left: { events: i.pendingEvents, ops: i.pendingOps, machines }
   };

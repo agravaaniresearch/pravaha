@@ -499,5 +499,21 @@ test("without a Raindrop token the strip says where tags come from instead of st
 });
 test("Stats lists the rules without the thumbs' own bookkeeping, in plain words", async () => {
   const t = await mount(); await t.engine.rateStory(1, 1); t.$$(".tab").find(b => b.textContent.includes("Stats")).click(); await wait(150);
-  const rules = [...t.$$(".trainrow .kw[data-v]")].map(x => x.textContent); assert.ok(rules.some(x => x.startsWith("tag: defence")), rules.join("|")); assert.ok(!rules.some(x => x.startsWith("story")), "no story entries shown"); t.close();
+  const rules = [...t.$$(".rchip")].map(x => x.title); assert.ok(rules.some(x => x.startsWith("tag: defence")), rules.join("|")); assert.ok(!rules.some(x => x.startsWith("story")), "no story entries shown"); t.close();
+});
+
+test("0.8.1: training rules sit in one collapsed line with a count, grouped into More and Less chips; a filter appears past twelve; the x removes a rule", async () => {
+  const t = await mount(); for (let i = 0; i < 14; i++) await t.engine.train("keyword", `word${i}`, i % 3 ? 1 : -1);
+  t.$$(".tab").find(b => b.textContent.includes("Stats")).click(); await wait(150);
+  const d = t.$("details.rules"); assert.ok(d && !d.open, "collapsed by default"); assert.match(d.querySelector("summary").textContent, /^14 rules: 9 more, 5 less$/);
+  assert.deepEqual([...t.$$(".rgroup > b")].map(b => b.textContent), ["More (9)", "Less (5)"]); assert.ok(t.$(".rfilter"), "filter past twelve");
+  const f = t.$(".rfilter"); f.value = "word1"; f.dispatchEvent(new t.win.Event("input")); await wait(50);
+  assert.ok([...t.$$(".rchip")].every(c => c.title.includes("word1")), "filtered"); assert.ok(t.$("details.rules").open, "a filter keeps it open");
+  t.$$(".rchip button")[0].click(); await wait(150); assert.equal((await t.engine.trainingRules()).length, 13); t.close();
+});
+
+test("0.8.1: the Sync page has an Extension health tile and the top bar carries a health dot", async () => {
+  const t = await mount(); await t.engine.syncNow({ quiet: true }); t.$$(".tab").find(b => b.textContent.includes("Sync")).click(); await wait(200);
+  const tile = [...t.$$(".tile")].find(x => x.textContent.includes("Extension health")); assert.ok(tile, "tile shown: " + [...t.$$(".tile")].map(x => x.textContent.slice(0, 30)).join("|")); assert.equal(tile.dataset.state, "green"); assert.match(tile.textContent, /written in the last hour/);
+  assert.ok(t.$(".pill .hdot[data-h='green']")); t.close();
 });

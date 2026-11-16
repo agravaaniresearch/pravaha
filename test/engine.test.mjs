@@ -49,7 +49,7 @@ test("open marks read, logs the event and raises the feed's standing; dismiss hi
   await e.recordDwell(1, 1, 400); assert.equal(e.stats().dwellMinutes, 1 - 1 + Math.round(40000 / 60000));
 });
 test("save toggles the Miniflux star, saves one way to Raindrop with local tag suggestions, and unsave reverses the star", async () => {
-  const w = await world(); const { e } = await w.mk("laptop"); await e.syncNow();
+  const w = await world(); const { e } = await w.mk("laptop"); await e.saveSettings({ saveToRaindrop: true }); await e.syncNow();
   const r = await e.toggleSave(1); assert.equal(r.saved, true); assert.equal(w.mf.st.entries.find(x => x.id === 1).starred, true);
   await new Promise(r => setTimeout(r, 20)); assert.equal(w.rd.st.saved.length, 1); assert.ok(w.rd.st.saved[0].tags.length > 0, "tags suggested from your own vocabulary");
   assert.equal(e.getView({ scope: "saved" }).total, 1);

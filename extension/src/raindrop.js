@@ -20,9 +20,15 @@ export class Raindrop {
     const out = [];
     for (let page = 0; page < maxPages; page++) {
       const r = await this.call("GET", `/raindrops/0?perpage=50&page=${page}`);
-      const items = r.items || []; out.push(...items.map(i => ({ id: i._id, title: i.title || "", excerpt: i.excerpt || "", note: i.note || "", tags: i.tags || [], domain: i.domain || domainOf(i.link), link: i.link, at: Date.parse(i.lastUpdate || i.created) || 0 })));
+      const items = r.items || []; out.push(...items.map(i => ({ id: i._id, coll: i.collection && i.collection.$id, title: i.title || "", excerpt: i.excerpt || "", note: i.note || "", tags: i.tags || [], domain: i.domain || domainOf(i.link), link: i.link, at: Date.parse(i.lastUpdate || i.created) || 0 })));
       if (items.length < 50) break;
     }
+    return out;
+  }
+  // Every collection, top level and nested, as [{ id, title }].
+  async collections() {
+    const out = [];
+    for (const p of ["/collections", "/collections/childrens"]) { const r = await this.call("GET", p); for (const c of r.items || []) out.push({ id: c._id, title: c.title || "" }); }
     return out;
   }
   async save({ link, title, tags }) { return this.call("POST", "/raindrop", { link, title, tags, pleaseParse: {} }); }
