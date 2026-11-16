@@ -22,7 +22,7 @@ export class Syncer {
 
   async ensureDirs() {
     const key = `${this.root}|${this.device}`;
-    if (this._dirs || this.state.dirsOk === key) return;
+    if (this._dirs || this.state.dirsOk === key) { this._skippedDirs = true; return; }
     await this.dav.mkdirs(`${this.root}/events/${this.device}`);
     await this.dav.mkdirs(`${this.root}/state`);
     await this.dav.mkdirs(`${this.root}/digests`);
@@ -115,6 +115,13 @@ export class Syncer {
 
   // One full pass: pull, push, publish this machine's state. Never throws; the outcome is in the report.
   async sync() {
+    const r = await this._syncOnce();
+    // The folders were assumed to exist and a write was refused: they may have been deleted. Make them again and try once more, now.
+    if (!r.ok && r.error && r.error.code === "bad-reply" && this._skippedDirs) return this._syncOnce();
+    return r;
+  }
+  async _syncOnce() {
+    this._skippedDirs = false;
     const report = { ok: false, devices: [], pulled: 0, pushed: 0, pending: this.pending().length, others: {}, error: null };
     try {
       await this.ensureDirs();
@@ -130,7 +137,7 @@ export class Syncer {
     } catch (e) {
       const plain = e instanceof PlainError ? e.plain : "Sync stopped because of an unexpected problem. The changes are still saved on this machine and will be retried.";
       this.state.lastError = { plain, at: this.now(), code: e.code || "error" };
-      if (e && e.code === "bad-reply") { this.state.dirsOk = null; this._dirs = false; this.state.stateSig = null; } // a folder may have gone: make it again next time
+      if (e && e.code === "bad-reply") { this.state.dirsOk = null; this._dirs = false; this.state.stateSig = null; } // a folder may have gone: make it again
       report.error = this.state.lastError; report.pending = this.pending().length;
     }
     return report;

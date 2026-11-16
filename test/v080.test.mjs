@@ -106,3 +106,11 @@ test("a feed icon Miniflux refuses is not asked for again on every poll", async 
   const base = w.fetchImpl; let asked = 0; e.fetchImpl = async (u, o) => { if (/\/icon$/.test(u)) { asked++; return new Response(JSON.stringify({ error_message: "not found" }), { status: 404 }); } return base(u, o); }; e._wire();
   await e.refreshIcons(); await e.refreshIcons(); assert.equal(asked, 1);
 });
+
+test("a WebDAV folder deleted behind Pravaha's back is made again in the same sync, without a red light", async () => {
+  const w = await world(); const { e } = await w.mk("laptop"); await e.syncNow(); quiet(e);
+  for (const k of [...w.dav.files.keys()]) w.dav.files.delete(k); w.dav.dirs.clear(); w.dav.dirs.add("");
+  const base = w.dav.handler; w.dav.handler = async (u, o) => { if (o.method === "PUT") { const p = decodeURIComponent(new URL(u).pathname).replace(/^\/+/, ""); const dir = p.split("/").slice(0, -1).join("/"); if (!w.dav.dirs.has(dir)) return new Response("", { status: 409 }); } return base(u, o); };
+  await e.open(1); await e.syncNow(); quiet(e);
+  assert.equal(e.status().lights.find(l => l.id === "webdav").state, "green"); assert.ok([...w.dav.files.keys()].some(k => k.startsWith("pravaha/events/laptop/")));
+});

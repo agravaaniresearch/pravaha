@@ -615,7 +615,8 @@ function observeRows() {
 const TABS = [["feed", "Newsfeed", "list"], ["saved", "Saved", "star"], ["stats", "Stats", "chart"], ["sync", "Sync", "sync"], ["settings", "Settings", "gear"]];
 const THEMES = THEME_IDS; const THEME_NAMES = { light: "Light", khadi: "Khadi (cotton and sindoor)", dark: "Dark", jamun: "Jamun (plum and saffron)", lacquer: "Lacquer (oxblood and jade)", oled: "OLED black", auto: "Follow the system" };
 // Choosing one of the 0.8.0 themes also takes its matching relevance colours, unless you then pick others.
-const themePatch = (t) => (THEME_PALETTE[t] && THEME_PALETTE[t] !== "ember" ? { theme: t, palette: THEME_PALETTE[t] } : { theme: t });
+const OWN_PALETTES = new Set(Object.values(THEME_PALETTE).filter(p => p !== "ember"));
+const themePatch = (t) => (THEME_PALETTE[t] && THEME_PALETTE[t] !== "ember" ? { theme: t, palette: THEME_PALETTE[t] } : OWN_PALETTES.has(U.palette) ? { theme: t, palette: "ember" } : { theme: t }); // leaving Khadi, Jamun or Lacquer drops their colours too
 function go(tab) {
   S.lastSheet = null;
   stopDwell(); dw.id = null; S.openCard = null; S.tab = tab; lsSet("pravaha.tab", tab); S.keep = new Set(); S.pop = null;
