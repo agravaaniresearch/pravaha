@@ -1,3 +1,5 @@
+// Tests written before 0.8.6 expect each change to reach Miniflux at once; the batching tests opt back in.
+globalThis.PRAVAHA_BATCH_MS = 0;
 import { Engine, MemoryStorage } from "../extension/src/engine.js";
 // Shared fakes: an in-memory WebDAV server, Miniflux and Raindrop, all behind one fetch function.
 export function makeDav({ faults = () => null } = {}) {

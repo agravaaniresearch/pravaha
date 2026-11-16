@@ -249,3 +249,7 @@ Interest profile: `(1 - L) * bookmark mean + L * weighted mean of pulls`, pull w
 | `raindropCache.v` | 3. Each bookmark carries `coll` (its Raindrop collection id); `mfColl` is `{ id, title }` of the collection titled "MiniFlux Saves" (case and spaces ignored), or null. |
 | Raindrop saves as signal | Worked out, never logged: for each bookmark in `mfColl` whose canonical link matches a cached article without a Pravaha `save`/`unsave` event, `_derive` adds an in-memory `save` event (`device: "raindrop"`, time = the bookmark's last update, terms = the article's first 12 stems). Standing and the profile treat it as a save. |
 | `settings.saveToRaindrop` | Default false from 0.8.1; `settings.rdSave081` records that the one-time switch-off ran. |
+
+## 0.8.6: batched status changes
+
+`pendingOps` is unchanged. What changed is when it is sent: status ops from cards, opens, dismisses, read and unread marks start a 30-second timer (`BATCH_MS`), reset by each new change; the queue is sent when the timer ends, on the reader's `sendHeld` message (tab hidden, page closed, leaving the feed tabs), at the start of every `syncNow`, and on `runtime.onSuspend`. Star ops and verified bulk marks call `flushOps` at once, which sends the whole queue. `status().held` is true while the timer runs.

@@ -46,6 +46,10 @@ const HEAVY = new Set(["cache", "events", "searchIndex"]);
 // 0.8.1 fix: 1.2 s meant one multi-megabyte write per article read. Durability does not need it (pendingOps and the history tail are
 // written at once), so the heavy keys wait a minute, and every poll and every unload of the background page writes them anyway.
 const DEFER_MS = 60000;
+// 0.8.6: read, unread, card and dismiss changes are held and sent to Miniflux together: 30 seconds after the last one, when you leave
+// the reader or the Newsfeed, at every poll, and on Sync now. They are saved on this machine at once, so holding them loses nothing.
+// Saves, bulk "mark as read" with checking, subscribing and feed changes still go at once.
+export const BATCH_MS = 30000;
 const FEEDS_EVERY_MS = 15 * 60000;
 const cacheJson = (c) => JSON.stringify(c, (k, v) => (k === "lastChangeTs" ? undefined : v)); // the poll cursor lives in "marks"
 const hashStr = (str) => { let h = 2166136261 >>> 0; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + ":" + str.length; };
@@ -272,6 +276,16 @@ export class Engine {
 
   // One flush at a time. An op that is being sent is marked in flight, so a later change can never be
   // merged into it and then dropped when it completes.
+  async _sendLater() {
+    if (!this.mf || !this.pendingOps.length) return;
+    const ms = this.batchMs ?? (globalThis.PRAVAHA_BATCH_MS ?? BATCH_MS); // the older tests set 0: send at once, as before 0.8.6
+    if (!ms) { await this.flushOps(); this._notify(); return; }
+    if (this._batchTimer) clearTimeout(this._batchTimer);
+    this._batchTimer = setTimeout(() => { this._batchTimer = null; this.flushOps().then(() => this._notify()).catch(() => {}); }, ms);
+    if (this._batchTimer.unref) this._batchTimer.unref();
+  }
+  // Send whatever is held now (leaving the page, Sync now, Firefox unloading the background).
+  sendHeld() { if (this._batchTimer) { clearTimeout(this._batchTimer); this._batchTimer = null; } return this.flushOps().then(() => this._notify()); }
   flushOps() {
     if (!this.mf || !this.pendingOps.length) return Promise.resolve();
     if (!this._flushP) this._flushP = this._flush().finally(() => { this._flushP = null; });
@@ -492,6 +506,7 @@ export class Engine {
 
   // ---------- sync ----------
   async syncNow({ quiet = false } = {}) {
+    if (this._batchTimer) { clearTimeout(this._batchTimer); this._batchTimer = null; } // a poll sends whatever is held
     const before = quiet ? this.signature() : null;
     const t0 = this.now(), w0 = this.health.writes.length ? this.health.writes[this.health.writes.length - 1][0] : 0, r0 = this._reqs || 0; this._pollHeavy = false; const p0 = performance.now(); const owed = this._deferred.size > 0; // your own reading left writes waiting: not the poll's doing
     if (quiet) { this._muted = true; this._mutedAt = this.now(); this._heldChange = false; }
@@ -554,7 +569,7 @@ export class Engine {
       webdav: { configured: !!this.dav, error: this.net.webdav && this.net.webdav.error, lastOkAt: this.net.webdav && this.net.webdav.lastOkAt },
       raindrop: { configured: !!this.rd, error: this.net.raindrop && this.net.raindrop.error, lastOkAt: this.net.raindrop && this.net.raindrop.lastOkAt, mfColl: this.raindropCache && this.raindropCache.mfColl ? { title: this.raindropCache.mfColl.title, ...(this._derive(), this._rdMatch) } : null },
       health: healthSummary(this.health, this.now(), { events: this.log.count(), bytesInUse: this.bytesInUse || null }),
-      serverLamp: serverLamp(this.server, !!this.mf, this.now()), eventCounts: this.log.countsByDevice(), pendingOps: this.pendingOps.reduce((n, o) => n + (o.ids ? o.ids.length : 1), 0), pendingEvents: this.syncer ? this.syncer.pending().length : this.log.own().length, corruptLines: this.syncState.corruptLines,
+      serverLamp: serverLamp(this.server, !!this.mf, this.now()), eventCounts: this.log.countsByDevice(), pendingOps: this.pendingOps.reduce((n, o) => n + (o.ids ? o.ids.length : 1), 0), held: !!this._batchTimer, pendingEvents: this.syncer ? this.syncer.pending().length : this.log.own().length, corruptLines: this.syncState.corruptLines,
       feeds: { total: feeds.length, dead: feeds.filter(f => f.health.dead).length, trouble: feeds.filter(f => f.health.state === "amber").length }
     }) };
   }
@@ -653,9 +668,11 @@ export class Engine {
     for (const id of ids) { const it = this.cache.items[id]; if (!it || it.status === "read") continue; it.status = "read"; flipped.push(id); if (explicit && ids.length === 1) this._evt(it, "read_no_open"); }
     const changed = flipped.length;
     if (!ids.length) return { count: 0, changed: 0, ids: [], verified: true, retried: 0, failed: 0, pending: this._remaining() };
-    this._queue({ op: "status", ids: [...ids], status: "read" }); await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
+    const wantVerify = verify === undefined ? ids.length >= 25 : verify;
+    this._queue({ op: "status", ids: [...ids], status: "read" }); await this.persist(["cache", "events", "pendingOps"]); this._notify();
+    if (wantVerify) { await this.sendHeld(); } else await this._sendLater();
     const res = { count: ids.length, changed, ids: flipped, verified: false, retried: 0, failed: 0, pending: this._remaining() };
-    if (verify === undefined ? ids.length >= 25 : verify) Object.assign(res, await this._verifyRead(ids));
+    if (wantVerify) Object.assign(res, await this._verifyRead(ids));
     return res;
   }
   // Fetch what Miniflux still lists as unread, and resend any of ours that did not stick. A few rounds at most.
@@ -688,7 +705,7 @@ export class Engine {
   }
   async markUnread(ids) {
     for (const id of ids) { const it = this.cache.items[id]; if (it) it.status = "unread"; }
-    this._queue({ op: "status", ids: [...ids], status: "unread" }); await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
+    this._queue({ op: "status", ids: [...ids], status: "unread" }); await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this._sendLater();
     return { count: ids.length, pending: this._remaining() };
   }
   // The reader opened the article as an in-page card. A light positive signal, logged once per session.
@@ -697,7 +714,7 @@ export class Engine {
     if (!this.sessionCards.has(id)) { this.sessionCards.add(id); this._evt(it, "card"); }
     this.sessionFeeds.add(it.feedId);
     if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
-    await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
+    await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this._sendLater();
   }
   // ---------- local search ----------
   // The index is a compact record of every article seen: title, feed, tags, a short summary and about fourteen
@@ -961,7 +978,7 @@ export class Engine {
     const it = this.cache.items[id]; if (!it) return null;
     this._evt(it, "open"); this.sessionFeeds.add(it.feedId);
     if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
-    await this.persist(["cache", "events", "pendingOps"]); this._notify(); this.flushOps().then(() => this._notify());
+await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this._sendLater();
     return { url: it.url, feedId: it.feedId };
   }
   async recordDwell(entryId, feedId, ms) {
@@ -984,7 +1001,7 @@ export class Engine {
     const it = this.cache.items[id]; if (!it) return;
     this._evt(it, "dismiss");
     if (it.status !== "read") { it.status = "read"; this._queue({ op: "status", ids: [id], status: "read" }); }
-    await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
+    await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this._sendLater();
   }
   async undismissAll() {
     const d = this._derive();
@@ -994,7 +1011,7 @@ export class Engine {
     const back = [...d.dismissed].filter(id => this.cache.items[id] && this.cache.items[id].status === "read");
     for (const id of back) this.cache.items[id].status = "unread";
     if (back.length) this._queue({ op: "status", ids: back, status: "unread" });
-    await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
+    await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this._sendLater();
   }
   async train(type, key, value) { return this.trainMany([{ type, key, value }]); }
   // Several rules at once, written as separate events so that older copies of Pravaha still understand every one of them.

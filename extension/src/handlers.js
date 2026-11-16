@@ -50,6 +50,7 @@ export function makeHandlers({ engine, fetchImpl, runSync, schedule, openTab, pr
   card: (m) => engine.openCard(m.id),
   dwell: (m) => engine.recordDwell(m.id, m.feedId, m.ms),
   view: async (m) => { const tree = engine.tree(); return { view: engine.getView(m.params, tree), tree, status: engine.status() }; },
+  sendHeld: () => engine.sendHeld(),
   markRead: (m) => engine.markRead(m.ids, { explicit: !!m.explicit, verify: m.verify === undefined ? undefined : !!m.verify }),
   markUnread: (m) => engine.markUnread(m.ids),
   markScope: (m) => engine.markScope(String(m.scope || "all")),

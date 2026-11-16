@@ -168,6 +168,7 @@ function pillEl() {
   const st = S.status; const overall = st ? st.overall : "off"; const a = st && st.activity; const pend = st ? st.pendingCount || 0 : 0;
   let state = "idle"; let text = overall === "green" ? (st && st.scope === "miniflux" ? "Miniflux in sync" : "In sync") : overall === "red" ? "Needs attention" : overall === "amber" ? "Catching up" : "Not set up"; let sub = ""; let lamp = h("span", { class: "lamp " + overall + (overall === "green" ? " pulse" : "") });
   if (a || S.busy) { state = "syncing"; text = a ? a.label : "Syncing with Miniflux"; sub = a && a.total ? `${Math.min(a.done, a.total)} of ${a.total}` : ""; lamp = h("span", { class: "spin" }); }
+  else if (pend > 0 && !mfRed() && st && st.held) { state = "idle"; text = "Saved here"; sub = `${pend} held for Miniflux`; } // 0.8.6: held on purpose, sent together
   else if (pend > 0 && !mfRed()) { state = "syncing"; text = "Sending to Miniflux"; sub = `${pend} waiting`; lamp = h("span", { class: "spin" }); }
   else if (S.syncFlash > Date.now()) { state = "synced"; text = "Synced with Miniflux"; lamp = icon("check", 14); }
   const hl = st && st.health; const hdot = hl ? h("i", { class: "hdot", "data-h": hl.state, title: `Extension health: ${hl.sentence}` }) : null;
@@ -364,6 +365,10 @@ function startDwell(r) { stopDwell(); if (document.visibilityState === "visible"
 function stopDwell() { if (dw.id !== null && dw.start) { const ms = Date.now() - dw.start; if (ms >= 1000) send({ type: "dwell", id: dw.id, feedId: dw.feedId, ms }); } dw.start = 0; }
 function resumeDwell() { if (dw.id !== null && !dw.start && document.visibilityState === "visible" && document.hasFocus()) dw.start = Date.now(); }
 document.addEventListener("visibilitychange", () => (document.visibilityState === "hidden" ? stopDwell() : resumeDwell()));
+// 0.8.6: read changes are held briefly and sent together; leaving the reader sends them at once.
+const sendHeld = () => { send({ type: "sendHeld" }).catch(() => {}); };
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") sendHeld(); });
+window.addEventListener("pagehide", sendHeld);
 window.addEventListener("blur", stopDwell); window.addEventListener("focus", resumeDwell); window.addEventListener("pagehide", () => { stopDwell(); dw.id = null; });
 
 // An article only the search index remembers is fetched from Miniflux again before it can be opened or saved.
@@ -452,7 +457,7 @@ function rowEl(r) {
   return h("article", { class: "row", data: { id: r.id, read: String(r.read), saved: String(r.saved), sel: String(S.selId === r.id), card: "false", pending: String(!!r.pending), rating: String(r.rating || 0) }, style: { "--grade": g.bg, "--gfg": g.fg }, onclick: () => selectRow(r.id) },
     h("span", { class: "strip", "aria-hidden": "true" }),
     h("div", { class: "rmain" },
-      h("div", { class: "rmeta" }, h("span", { class: "newdot", title: "Unread" }), r.pending ? h("span", { class: "pdot", title: "Sending to Miniflux" }) : null, metaLine),
+      h("div", { class: "rmeta" }, h("span", { class: "newdot", title: "Unread" }), r.pending ? h("span", { class: "pdot", title: "Saved here; reaches Miniflux with the next batch" }) : null, metaLine),
       h("button", { class: "rtitle", onclick: (e) => { e.stopPropagation(); openCardFor(r); } }, hl(r.title)),
       r.summary ? h("div", { class: "rsnip" }, hl(r.summary)) : null, chips.length ? h("div", { class: "chips" }, chips) : null),
     h("div", { class: "rside" }, U.thumbs && r.thumb ? h("img", { class: "thumb", src: r.thumb, alt: "", loading: "lazy", referrerpolicy: "no-referrer", onerror: (e) => e.target.remove() }) : null,
@@ -619,6 +624,7 @@ const THEMES = THEME_IDS; const THEME_NAMES = { light: "Light", khadi: "Khadi (c
 const OWN_PALETTES = new Set(Object.values(THEME_PALETTE).filter(p => p !== "ember"));
 const themePatch = (t) => (THEME_PALETTE[t] && THEME_PALETTE[t] !== "ember" ? { theme: t, palette: THEME_PALETTE[t] } : OWN_PALETTES.has(U.palette) ? { theme: t, palette: "ember" } : { theme: t }); // leaving Khadi, Jamun or Lacquer drops their colours too
 function go(tab) {
+  if (isFeedTab() && !["feed", "saved"].includes(tab)) sendHeld();
   S.lastSheet = null;
   stopDwell(); dw.id = null; S.openCard = null; S.tab = tab; lsSet("pravaha.tab", tab); S.keep = new Set(); S.pop = null;
   if (tab === "feed" || tab === "saved") loadView();

@@ -17,6 +17,7 @@ export function computeStatus(i) {
   // Miniflux
   if (!i.miniflux.configured) lights.push({ id: "miniflux", label: "Miniflux", state: "off", sentence: "Not set up yet. Add the server address and API key in Settings." });
   else if (i.miniflux.error) lights.push({ id: "miniflux", label: "Miniflux", state: "red", sentence: `${i.miniflux.error.plain} Last success was ${since(i.miniflux.lastOkAt)}.` });
+  else if (i.pendingOps > 0 && i.held) lights.push({ id: "miniflux", label: "Miniflux", state: "green", sentence: `${i.pendingOps} read change${i.pendingOps === 1 ? " is" : "s are"} saved here and will reach Miniflux together within half a minute, or when you leave the reader.` });
   else if (i.pendingOps > 0) lights.push({ id: "miniflux", label: "Miniflux", state: "amber", sentence: `${i.pendingOps} read or save change${i.pendingOps === 1 ? "" : "s"} still waiting to reach Miniflux.` });
   else lights.push({ id: "miniflux", label: "Miniflux", state: "green", sentence: `Connected. Last fetch ${since(i.miniflux.lastOkAt)}.` });
 
@@ -78,6 +79,7 @@ export function computeStatus(i) {
   const overall = !i.miniflux.configured ? "off" : worst(syncLights.map(l => l.state));
   const scope = !i.miniflux.configured ? "none" : i.webdav.configured ? "full" : "miniflux";
   return {
+    held: !!i.held,
     health: i.health || null,
     overall, scope, lights, devices,
     left: { events: i.pendingEvents, ops: i.pendingOps, machines }

@@ -86,7 +86,7 @@ browser.alarms.onAlarm.addListener(async (a) => {
   await runSync({ quiet: true });
 });
 // Firefox unloads this page when it is idle; the heavy keys waiting for their short delay are written first.
-if (browser.runtime.onSuspend) browser.runtime.onSuspend.addListener(() => { engine.flushPersist().catch(() => {}); });
+if (browser.runtime.onSuspend) browser.runtime.onSuspend.addListener(() => { engine.sendHeld().catch(() => {}); engine.flushPersist().catch(() => {}); });
 browser.runtime.onInstalled.addListener(async () => { await ready; await schedule(); });
 browser.runtime.onStartup.addListener(async () => { await ready; await runSync(); });
 ready.then(badgeSoon).catch(() => {});

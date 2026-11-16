@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.6
+
+- **Read changes are sent to Miniflux in batches.** Opening a card, marking read or unread, dismissing, and reading on scroll now change the screen and are saved on this machine at once, but reach Miniflux together in one request. The batch goes 30 seconds after your last change, when you leave the Newsfeed or Saved tab, when the reader tab is hidden or closed, at every poll, on Sync now, and when Firefox unloads the background page. Forty articles read on scroll now cost one request instead of forty.
+- **Still sent at once:** saves and unsaves (which also carry any held reads with them), a large "mark as read" that Pravaha checks with Miniflux, subscribing, and feed changes.
+- Nothing is lost if Firefox closes before a batch goes: the changes are on disk and are sent at the next start. The one cost is that, until then, your other machine still shows those articles as unread.
+- The status pill says "Saved here, N held for Miniflux" while a batch is waiting, instead of a spinning "Sending" light, and the Miniflux tile stays green.
+- Checked: 269 tests pass (4 new), lint is clean, and in real Firefox 160 three cards opened in a row sent no request until the Newsfeed was left, then one.
+
 ## 0.8.2
 
 - **Fixed: 0.8.1 could not reach Miniflux, WebDAV or Raindrop from the background.** 0.8.1 added a request counter for the health tile that called a fetch function the background page never passes, so every sync request failed while the Test buttons (which run in the reader tab) still worked. The counter now falls back to the browser's own fetch. A test builds the engine exactly as the background does, and real Firefox 160 reaches the fake servers again.
