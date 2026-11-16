@@ -40,6 +40,7 @@ export function makeHandlers({ engine, fetchImpl, runSync, schedule, openTab, pr
   boot: async () => {
     // Opening the reader after a quiet spell fetches at once instead of waiting for the next alarm.
     const last = (engine.net && engine.net.miniflux && engine.net.miniflux.lastOkAt) || 0;
+    engine.askFresh().catch(() => {}); // opening the reader asks Miniflux to fetch every feed now (throttled)
     if (runSync && engine.mf && Date.now() - last > Math.max(1, engine.settings.pollMinutes || 2) * 60000) Promise.resolve().then(() => runSync({ quiet: true })).catch(() => {});
     return { settings: engine.settings, tree: engine.tree(), status: engine.status(), rules: engine.trainingRules(), icons: engine.icons };
   },

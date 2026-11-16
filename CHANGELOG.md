@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.7
+
+- **Fresher articles when you look, in the spirit of Inoreader.** When you open the reader or press Sync now, Pravaha asks Miniflux to fetch every feed at once, then looks again 45 seconds and 2 minutes later to bring in what arrived. Quiet background polls never ask.
+- It asks at most once every 15 minutes. If Miniflux refuses or limits the request, Pravaha does not ask again for an hour, and syncing carries on unaffected.
+- A setting under Connections turns it off ("Ask Miniflux to fetch every feed when I open the reader or press Sync now").
+- Limits: hosted Miniflux still decides how fast it fetches each feed after being asked, and how often it accepts the request has not been tested against the real service. Checked: 272 tests pass (3 new) and lint is clean.
+
 ## 0.8.6
 
 - **Read changes are sent to Miniflux in batches.** Opening a card, marking read or unread, dismissing, and reading on scroll now change the screen and are saved on this machine at once, but reach Miniflux together in one request. The batch goes 30 seconds after your last change, when you leave the Newsfeed or Saved tab, when the reader tab is hidden or closed, at every poll, on Sync now, and when Firefox unloads the background page. Forty articles read on scroll now cost one request instead of forty.

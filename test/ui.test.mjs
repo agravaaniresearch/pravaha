@@ -442,6 +442,7 @@ test("Refresh every feed asks Miniflux to fetch and says so", async () => {
 test("the Sync page shows the Miniflux server tile with its version, a read-only check, and Got it after a change", async () => {
   const t = await mount(); t.$$(".tab").find(b => b.textContent.includes("Sync")).click(); await until(() => t.$(".tile .tbig")); 
   const tile = () => t.$$(".tile").find(x => x.textContent.includes("Miniflux server")); assert.ok(tile()); assert.match(tile().querySelector(".tbig").textContent, /2\.\d/);
+  await new Promise(r => setTimeout(r, 50)); t.w.mf.st.calls.length = 0; // 0.8.7: opening the reader asks Miniflux to fetch; only what the check does is counted
   tile().querySelector("[data-act='server-check']").click(); await until(() => t.$("[data-checks]")); assert.ok(t.$$("[data-checks] li").length >= 4); assert.ok(t.$$("[data-checks] li").some(l => /Version: Miniflux/.test(l.textContent)));
   assert.equal(t.w.mf.st.calls.filter(c => c.startsWith("PUT") || c.startsWith("DELETE") || c.includes("/refresh")).length, 0, "the check changes nothing");
   assert.equal(tile().querySelector("[data-act='server-ack']"), null);

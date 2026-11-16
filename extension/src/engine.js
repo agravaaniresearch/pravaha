@@ -21,7 +21,7 @@ export const DEFAULT_SETTINGS = {
   device: "", miniflux: { url: "https://reader.miniflux.app", token: "" },
   webdav: { url: "https://myfiles.fastmail.com", user: "", pass: "", root: "pravaha" },
   raindrop: { token: "" }, weights: { ...DEFAULT_WEIGHTS }, pollMinutes: 2, novelty: true,
-  palette: "ember", theme: "light", sync: { keys: true, settings: true }, syncMeta: {}, ui: null, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: false, treeOrder: {}, treeOrderAt: 0, searchKeepDays: 400
+  palette: "ember", theme: "light", sync: { keys: true, settings: true }, syncMeta: {}, ui: null, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: false, askFresh: true, treeOrder: {}, treeOrderAt: 0, searchKeepDays: 400
 };
 const DAY = 86400000;
 const randomId = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => "abcdefghjkmnpqrstuvwxyz23456789"[b % 31]).join("");
@@ -507,6 +507,7 @@ export class Engine {
   // ---------- sync ----------
   async syncNow({ quiet = false } = {}) {
     if (this._batchTimer) { clearTimeout(this._batchTimer); this._batchTimer = null; } // a poll sends whatever is held
+    if (!quiet) this.askFresh().catch(() => {}); // Sync now also asks Miniflux to fetch
     const before = quiet ? this.signature() : null;
     const t0 = this.now(), w0 = this.health.writes.length ? this.health.writes[this.health.writes.length - 1][0] : 0, r0 = this._reqs || 0; this._pollHeavy = false; const p0 = performance.now(); const owed = this._deferred.size > 0; // your own reading left writes waiting: not the poll's doing
     if (quiet) { this._muted = true; this._mutedAt = this.now(); this._heldChange = false; }
@@ -902,9 +903,20 @@ export class Engine {
       return { ok: false, sentence: (e instanceof PlainError ? e.plain : "The rename failed for an unexpected reason.") + part };
     } finally { this._actEnd("manage"); }
   }
-  _later(ms) {
-    const t = setTimeout(async () => { this._timers.delete(t); try { await this.refresh({ feeds: true }); this._notify(); } catch { /* shown on the Sync page */ } }, ms);
+  _later(ms, feeds = true) {
+    const t = setTimeout(async () => { this._timers.delete(t); try { await this.refresh({ feeds }); this._notify(); } catch { /* shown on the Sync page */ } }, ms);
     if (t && t.unref) t.unref(); this._timers.add(t);
+  }
+  // 0.8.7: Inoreader-like freshness. When you open the reader or press Sync now, Miniflux is asked to fetch every feed now, and Pravaha
+  // looks again 45 seconds and 2 minutes later. At most once every 15 minutes; if Miniflux refuses or limits it, not again for an hour.
+  async askFresh() {
+    if (!this.mf || this.settings.askFresh === false) return false;
+    const now = this.now(), m = this.marks;
+    if (now - (m.freshAt || 0) < 15 * 60000 || now < (m.freshBackoff || 0)) return false;
+    m.freshAt = now;
+    try { await this.mf.refreshAll(); m.freshOk = now; this._later(45000, false); this._later(120000, false); }
+    catch (e) { m.freshBackoff = now + 3600000; m.freshErr = e && e.plain ? e.plain : "refused"; }
+    await this.persist(["marks"]); return true;
   }
   // Ask Miniflux to fetch now, then bring in what arrived. A feed is fetched while Pravaha waits; a folder is fetched by Miniflux in the background, so Pravaha looks again a little later.
   async refreshScope(scope) {
