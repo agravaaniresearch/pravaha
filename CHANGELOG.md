@@ -55,9 +55,22 @@ On the synthetic library the share of on-topic articles in the top 100 went from
 - **Three new themes, each with its own relevance colours:** Khadi (unbleached cotton, kohl text, sindoor accent), Jamun (plum dark with kesar saffron running into rani pink), Lacquer (oxblood dark with jade). Choosing one also picks its colours; the palette can still be changed.
 - The open row no longer repeats the title and summary above the card. Scores sit at the right edge in tabular figures, and the relevance strip glows faintly in its own colour so the day's heat reads down the left edge.
 
+### Found by the independent QA pass in real Firefox 160, and fixed
+
+- Reordering folders wrote the history copy of the order in memory only, so it was lost when Firefox unloaded the background page (Firefox Sync still carried it). It is now saved at once; checked by unloading the page in real Firefox.
+- With the side pane open, Page Down, Space and the arrow keys scrolled the list behind it. They now scroll the article.
+- A publish date in the future showed as "1 minute ago" with a New chip and sat first in its feed. The display and the order now use the same guard as the score.
+- Leaving Khadi, Jamun or Lacquer kept their relevance colours on the other themes.
+- The hot chip on Khadi was 4.0:1 contrast; it is now above 4.5:1. "Why it ranks here" lacked a bar for the fifth signal.
+- Each wake of the background page re-armed the poll alarm, adding an extra poll twelve seconds later (present since 0.4). The alarm is now re-armed only when the interval changes.
+- Pressing Sync now while a quiet poll was running returned at once and did nothing. It now runs right after.
+- WebDAV folders deleted behind Pravaha's back made the next sync fail once before recovering; it now makes them again within the same sync.
+
 ### Checked
 
-- 255 tests pass (29 new in `test/scoring.test.mjs` and `test/v080.test.mjs`), web-ext lint is clean, and the failure trials in `docs/FAILURE_RATES.md` are unchanged at 0, 5, 20 and 50 percent of requests failing. Real Firefox 160 runs are in the QA section of the README.
+- 256 tests pass and 2 are skipped (30 new, in `test/scoring.test.mjs` and `test/v080.test.mjs`); web-ext lint is clean; the failure trials in `docs/FAILURE_RATES.md` are unchanged at 0, 5, 20 and 50 percent of requests failing.
+- Real Firefox 160 against fake servers: the existing suites pass (e2e 32 of 32, e2e050 44 of 44, e2e060 12 of 12 and 13 of 13 on a 1,260-article library, shots070 9 of 9 with the Apple fonts, no toasts or flashes while idle); the reader-open check works in Firefox's event page; with the reader closed, polls are skipped until the interval passes; idle polls write none of the heavy keys; delayed writes land and survive a restart; two machines (including one on 0.7.0) converge on history, training and folder order; a hung Miniflux request is abandoned and the next sync runs; the side pane works with j, k, o, Esc, read-on-scroll and the reading keys at 1800, 1920 and 2560 pixels; no console errors.
+- Known and left: after the WebDAV folders are deleted, a poll with nothing to send stays green and the state file returns within 15 minutes, when it is next rewritten.
 - Not verified against a real Miniflux, Fastmail or Raindrop. The new feed standing and the hot threshold are tuned on synthetic data.
 
 ## 0.7.0
