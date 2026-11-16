@@ -21,7 +21,7 @@ export const DEFAULT_SETTINGS = {
   device: "", miniflux: { url: "https://reader.miniflux.app", token: "" },
   webdav: { url: "https://myfiles.fastmail.com", user: "", pass: "", root: "pravaha" },
   raindrop: { token: "" }, weights: { ...DEFAULT_WEIGHTS }, pollMinutes: 2, novelty: true,
-  palette: "ember", theme: "light", sync: { keys: true, settings: true }, syncMeta: {}, ui: null, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: false, askFresh: true, treeOrder: {}, treeOrderAt: 0, searchKeepDays: 400
+  palette: "ember", theme: "light", sync: { keys: true, settings: true }, syncMeta: {}, ui: null, retentionDays: 30, autoTag: true, autoDigest: true, saveToRaindrop: true, askFresh: true, treeOrder: {}, treeOrderAt: 0, searchKeepDays: 400
 };
 const DAY = 86400000;
 const randomId = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => "abcdefghjkmnpqrstuvwxyz23456789"[b % 31]).join("");
@@ -70,7 +70,8 @@ export class Engine {
     this.settings.webdav = { ...DEFAULT_SETTINGS.webdav, ...(this.settings.webdav || {}) };
     this.settings.raindrop = { ...DEFAULT_SETTINGS.raindrop, ...(this.settings.raindrop || {}) };
     // 0.8.1: Miniflux's own Raindrop integration now saves articles, so Pravaha's one-way save is switched off once, to avoid duplicates. It can be turned back on.
-    if (!this.settings.rdSave081) { this.settings.saveToRaindrop = false; this.settings.rdSave081 = true; await this.storage.set({ settings: this.settings }); }
+    // 0.8.8: the 0.8.1 switch-off is withdrawn. Miniflux's integration fires only on its own "Save" action, never on a star, so Pravaha's save is the one that works.
+    if (!this.settings.rdSave088) { this.settings.saveToRaindrop = true; this.settings.rdSave088 = true; await this.storage.set({ settings: this.settings }); }
     this.settings.weights = { ...DEFAULT_WEIGHTS, ...(this.settings.weights || {}) };
     if (!this.settings.treeOrder || typeof this.settings.treeOrder !== "object") this.settings.treeOrder = {};
     this.settings.sync = { ...DEFAULT_SETTINGS.sync, ...(this.settings.sync || {}) }; this.settings.syncMeta = { ...(this.settings.syncMeta || {}) };
@@ -1004,7 +1005,9 @@ await this.persist(["cache", "events", "pendingOps"]); this._notify(); await thi
     let tags = [];
     if (it.starred && this.rd && this.settings.saveToRaindrop) {
       if (this.settings.autoTag) tags = this.suggestTagsFor(id).map(t => t.tag);
-      this.rd.save({ link: it.url, title: it.title, tags }).then(() => this._netOk("raindrop")).catch(e => { this._netErr("raindrop", e); this._notify(); });
+      // 0.8.8: filed in "MiniFlux Saves" when that collection exists (0.8.7 and earlier sent no collection, so Raindrop used Unsorted).
+      const coll = this.raindropCache && this.raindropCache.mfColl && this.raindropCache.mfColl.id;
+      this.rd.save({ link: it.url, title: it.title, tags: [...new Set([...tags, "pravaha"])], collection: coll }).then(() => this._netOk("raindrop")).catch(e => { this._netErr("raindrop", e); this._notify(); });
     }
     await this.persist(["cache", "events", "pendingOps"]); this._notify(); await this.flushOps(); this._notify();
     return { saved: it.starred, tags };

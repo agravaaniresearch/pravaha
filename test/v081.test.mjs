@@ -30,10 +30,13 @@ test("an article saved both in Pravaha and by Miniflux counts once", async () =>
   assert.ok(Math.abs(one - without) < 1e-9, "the Raindrop copy adds nothing on top of your own save");
 });
 
-test("Pravaha's own one-way Raindrop save is off after the update, and can be turned back on", async () => {
-  const w = await world(); const { e } = await w.mk("laptop"); await e.syncNow();
-  assert.equal(e.settings.saveToRaindrop, false); await e.toggleSave(1); quiet(e); await new Promise(r => setTimeout(r, 20)); assert.equal(w.rd.st.saved.length, 0);
-  await e.saveSettings({ saveToRaindrop: true }); await e.load(); assert.equal(e.settings.saveToRaindrop, true, "the switch-off happens once only");
+test("0.8.8: a star is saved to Raindrop in the \"MiniFlux Saves\" collection with the tag pravaha; Unsorted only when the collection is missing", async () => {
+  const w0 = await world(); const url = w0.mf.st.entries.find(x => x.id === 2).url;
+  const { w, e } = await withColl([url]); assert.equal(e.settings.saveToRaindrop, true);
+  await e.toggleSave(1); quiet(e); await new Promise(r => setTimeout(r, 20));
+  const body = w.rd.st.saved[w.rd.st.saved.length - 1]; assert.deepEqual(body.collection, { $id: 77 }); assert.ok(body.tags.includes("pravaha"));
+  e.raindropCache.mfColl = null; await e.toggleSave(3); quiet(e); await new Promise(r => setTimeout(r, 20));
+  assert.equal(w.rd.st.saved[w.rd.st.saved.length - 1].collection, undefined, "no collection known: Raindrop's Unsorted");
 });
 
 test("health: an idle poll is recorded as light, with its requests and no large write", async () => {

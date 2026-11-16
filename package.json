@@ -1,6 +1,6 @@
 {
   "name": "pravaha",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "private": true,
   "type": "module",
   "description": "Pravaha: a relevance-ranked Firefox reader on top of Miniflux",

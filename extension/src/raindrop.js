@@ -31,5 +31,6 @@ export class Raindrop {
     for (const p of ["/collections", "/collections/childrens"]) { const r = await this.call("GET", p); for (const c of r.items || []) out.push({ id: c._id, title: c.title || "" }); }
     return out;
   }
-  async save({ link, title, tags }) { return this.call("POST", "/raindrop", { link, title, tags, pleaseParse: {} }); }
+  // collection: a Raindrop collection id; without one Raindrop files the bookmark in Unsorted.
+  async save({ link, title, tags, collection }) { return this.call("POST", "/raindrop", { link, title, tags, pleaseParse: {}, ...(collection ? { collection: { $id: collection } } : {}) }); }
 }

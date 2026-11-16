@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.8
+
+- **Fixed: stars went to Raindrop's Unsorted.** Pravaha's own save sent no collection, so Raindrop filed every bookmark in Unsorted. It now files them in the "MiniFlux Saves" collection when that collection exists, with the suggested tags plus the tag "pravaha". Only when no such collection is found does Unsorted remain.
+- **Pravaha's own save is the working path, so it is on again.** Miniflux's Raindrop integration fires only when you use Miniflux's own "Save" action, never on a star, which is why "MiniFlux Saves" stayed empty. The 0.8.1 switch-off is withdrawn and the setting is on by default.
+
 ## 0.8.7
 
 - **Fresher articles when you look, in the spirit of Inoreader.** When you open the reader or press Sync now, Pravaha asks Miniflux to fetch every feed at once, then looks again 45 seconds and 2 minutes later to bring in what arrived. Quiet background polls never ask.
