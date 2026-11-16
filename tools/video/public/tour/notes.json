@@ -1,0 +1,455 @@
+{
+ "feed": {
+  "w": 1440,
+  "h": 900,
+  "notes": [
+   {
+    "box": [
+     0,
+     52,
+     272,
+     848
+    ],
+    "label": "Folders and feeds with unread counts; drag to reorder folders"
+   },
+   {
+    "box": [
+     301,
+     163,
+     4,
+     119.828125
+    ],
+    "label": "Relevance strip: the hotter the colour, the more it matters to you"
+   },
+   {
+    "box": [
+     1343,
+     165,
+     56,
+     33
+    ],
+    "label": "Score out of 100, with the reason on hover"
+   },
+   {
+    "box": [
+     362.46875,
+     256.828125,
+     72.390625,
+     20
+    ],
+    "label": "Hot: the same story in several of your feeds"
+   },
+   {
+    "box": [
+     1246.546875,
+     116,
+     156.453125,
+     30
+    ],
+    "label": "Mark a whole feed section read in one go"
+   },
+   {
+    "box": [
+     1285.484375,
+     7.5,
+     140.515625,
+     36
+    ],
+    "label": "Status pill: sync state and the health dot"
+   },
+   {
+    "box": [
+     1193.484375,
+     7.5,
+     36,
+     36
+    ],
+    "label": "Seven themes, one click each"
+   }
+  ]
+ },
+ "card": {
+  "w": 1440,
+  "h": 900,
+  "notes": [
+   {
+    "box": [
+     346,
+     267,
+     1030,
+     36.03125
+    ],
+    "label": "The article opens as a card inside the list"
+   },
+   {
+    "box": [
+     346,
+     339.875,
+     1030,
+     81
+    ],
+    "label": "Bionic reading, open in background, full text, more or less like this, save, dismiss"
+   },
+   {
+    "box": [
+     346,
+     434.875,
+     1030,
+     112.125
+    ],
+    "label": "Click a tag or word to train the ranking"
+   },
+   {
+    "box": [
+     346,
+     965.5625,
+     1030,
+     39.84375
+    ],
+    "label": "Why it ranks here: every signal as a bar"
+   }
+  ]
+ },
+ "s-conn": {
+  "w": 1440,
+  "h": 900,
+  "notes": [
+   {
+    "box": [
+     178.953125,
+     581,
+     44.09375,
+     14
+    ],
+    "label": "Miniflux: the feed engine and the source of truth"
+   },
+   {
+    "box": [
+     702.65625,
+     276.03125,
+     306.671875,
+     20.296875
+    ],
+    "label": "Fastmail WebDAV carries reading history between machines"
+   },
+   {
+    "box": [
+     1059.328125,
+     304.328125,
+     306.65625,
+     52.390625
+    ],
+    "label": "Raindrop: your bookmarks teach the ranking"
+   },
+   {
+    "box": [
+     327,
+     687.265625,
+     1058,
+     28
+    ],
+    "label": "Fresh articles when you open the reader"
+   },
+   {
+    "box": [
+     327,
+     731.265625,
+     1058,
+     28
+    ],
+    "label": "Stars go to Raindrop's MiniFlux Saves, with tags"
+   }
+  ]
+ },
+ "s-look": {
+  "w": 1440,
+  "h": 900,
+  "notes": [
+   {
+    "box": [
+     517.171875,
+     342.3125,
+     62.5,
+     30
+    ],
+    "label": "Theme: Light, Khadi, Dark, Jamun, Lacquer, OLED, system"
+   },
+   {
+    "box": [
+     881.8125,
+     342.3125,
+     56.625,
+     30
+    ],
+    "label": "Relevance colours"
+   },
+   {
+    "box": [
+     348,
+     422.3125,
+     1016,
+     28
+    ],
+    "label": "Read-on-scroll: marks are batched to Miniflux"
+   },
+   {
+    "box": [
+     348,
+     504.3125,
+     1016,
+     31.890625
+    ],
+    "label": "Choose when Pravaha asks before marking read"
+   }
+  ]
+ },
+ "s-feeds": {
+  "w": 1440,
+  "h": 900,
+  "notes": [
+   {
+    "box": [
+     1067.09375,
+     266.53125,
+     168.09375,
+     19
+    ],
+    "label": "Show only feeds Miniflux is failing to fetch"
+   },
+   {
+    "box": [
+     98,
+     217.84375,
+     141.75,
+     20.296875
+    ],
+    "label": "Each feed: health, rename, move, refresh, unsubscribe"
+   }
+  ]
+ },
+ "s-rank": {
+  "w": 1440,
+  "h": 900,
+  "notes": [
+   {
+    "box": [
+     348,
+     320.5,
+     110,
+     18.84375
+    ],
+    "label": "Match against your Raindrop tags"
+   },
+   {
+    "box": [
+     348,
+     350.5,
+     110,
+     18.84375
+    ],
+    "label": "Your browsing history and bookmarks"
+   },
+   {
+    "box": [
+     348,
+     380.5,
+     110,
+     18.84375
+    ],
+    "label": "Share of a feed you actually read"
+   },
+   {
+    "box": [
+     348,
+     439.921875,
+     110,
+     37.6875
+    ],
+    "label": "Fever-style hot stories"
+   },
+   {
+    "box": [
+     348,
+     533.859375,
+     1016,
+     28
+    ],
+    "label": "A little novelty each session"
+   }
+  ]
+ },
+ "s-move": {
+  "w": 1440,
+  "h": 900,
+  "notes": [
+   {
+    "box": [
+     348,
+     446.640625,
+     1016,
+     28
+    ],
+    "label": "Keys travel by Firefox Sync"
+   },
+   {
+    "box": [
+     348,
+     484.640625,
+     1016,
+     28
+    ],
+    "label": "Settings, folder order and look travel too"
+   },
+   {
+    "box": [
+     348,
+     841.5,
+     1016,
+     28
+    ],
+    "label": "Or a settings file, sealed with a passphrase"
+   }
+  ]
+ },
+ "s-machine": {
+  "w": 1440,
+  "h": 900,
+  "notes": [
+   {
+    "box": [
+     348,
+     319.921875,
+     329.328125,
+     52.390625
+    ],
+    "label": "Name each machine once"
+   },
+   {
+    "box": [
+     691.328125,
+     319.921875,
+     329.328125,
+     52.390625
+    ],
+    "label": "Poll interval: yours is 30 minutes"
+   },
+   {
+    "box": [
+     1034.65625,
+     319.921875,
+     329.34375,
+     52.390625
+    ],
+    "label": "How long read articles stay local"
+   },
+   {
+    "box": [
+     348,
+     382.3125,
+     1016,
+     28
+    ],
+    "label": "Weekly digest to WebDAV"
+   }
+  ]
+ },
+ "sync": {
+  "w": 1440,
+  "h": 900,
+  "notes": [
+   {
+    "box": [
+     327,
+     477.15625,
+     254,
+     204.296875
+    ],
+    "label": "One tile per service, each with a plain sentence"
+   },
+   {
+    "box": [
+     882,
+     712.453125,
+     216,
+     30
+    ],
+    "label": "Extension health: what Pravaha costs your Firefox"
+   },
+   {
+    "box": [
+     300,
+     232.03125,
+     1112,
+     890.609375
+    ],
+    "label": "Changes still waiting to sync"
+   },
+   {
+    "box": [
+     300,
+     232.03125,
+     1112,
+     890.609375
+    ],
+    "label": "History from each machine"
+   }
+  ]
+ },
+ "stats": {
+  "w": 1440,
+  "h": 900,
+  "notes": [
+   {
+    "box": [
+     319,
+     307.28125,
+     511,
+     27.546875
+    ],
+    "label": "How your articles spread across relevance"
+   },
+   {
+    "box": [
+     882,
+     307.28125,
+     511,
+     27.546875
+    ],
+    "label": "If darker bands are opened more, ranking works"
+   },
+   {
+    "box": [
+     319,
+     774.21875,
+     511,
+     27.546875
+    ],
+    "label": "Training rules fold into chips"
+   }
+  ]
+ },
+ "ultra": {
+  "w": 2560,
+  "h": 1080,
+  "notes": [
+   {
+    "box": [
+     300,
+     106,
+     1192,
+     1733.015625
+    ],
+    "label": "The list stays on the left"
+   },
+   {
+    "box": [
+     1520,
+     52,
+     1040,
+     1028
+    ],
+    "label": "On ultrawide screens the article reads in its own pane"
+   }
+  ]
+ }
+}
